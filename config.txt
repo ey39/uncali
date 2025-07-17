@@ -1,0 +1,3 @@
+pip3 install torch torchvision torchaudio
+pip install robosuite==1.4.0 skrl==1.4.3 jupyter gym==0.26.2 tqdm typeguard omegaconf tensorboard==2.14.0 h5py
+pip install hydra-core --upgrade
