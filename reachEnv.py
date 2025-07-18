@@ -1,5 +1,8 @@
 # ===================gym=========================
 import gym
+# ===================datatime====================
+from datetime import datetime
+# ===================numpy=======================
 import numpy as np
 # ===================robosuite===================
 import robosuite as suite
@@ -19,6 +22,7 @@ from robosuite.wrappers import GymWrapper
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 # ===================skrl=======================
 from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
 from skrl.envs.wrappers.torch import wrap_env
@@ -96,7 +100,13 @@ class ReachEnv(SingleArmEnv):
         )
         self.pos_err_threshold = 0.05   # m
         self.rot_err_threshold = 0.3    # rad
-
+        self.camera_reset_episodes = 10
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # 构造日志目录
+        log_dir = f"runs_reach/torch/reach_task/reach_task_{timestamp}"
+        self.writer = SummaryWriter(log_dir=log_dir)
+        self.total_steps = 0
+        self.reset_policy_choice = 1
 
     def _load_model(self):
         self.frame_definitions = {}
@@ -219,6 +229,26 @@ class ReachEnv(SingleArmEnv):
             self.init_rot_err = error_info['rotation_error_angle']
             if (self.init_pos_err > self.pos_err_threshold) and (self.init_rot_err > self.rot_err_threshold):
                 break
+
+    def update_camera_pose(self):
+        """
+        设置新的相机位姿
+        """
+        while True:
+            self.T_camera_world = generate_perturbed_transform(
+                base_transform=self.T_camera_world,
+                translation_error_range=(-0.5, 0.5),
+                rotation_error_range=(-45, 45),
+                rotation_mode='euler',
+            )
+            T_target_camera = self.get_target_pose()
+            T_tool_camera = self.get_tool_pose()
+            error_info = calculate_pose_error(T_target_camera, T_tool_camera, angle_unit='radians')
+            self.init_pos_err = error_info['translation_magnitude']
+            self.init_rot_err = error_info['rotation_error_angle']
+            if (self.init_pos_err > self.pos_err_threshold) and (self.init_rot_err > self.rot_err_threshold):
+                break
+        
     
     def set_camera_pose(self, T_camera_world):
         """
@@ -252,28 +282,34 @@ class ReachEnv(SingleArmEnv):
         obs_dict = super().reset()
         # 转换为gym风格的observation
         observation = obs_dict
-
+        self.episode_ctr = self.episode_ctr + 1
         print("\n=============================================================")
         print(f" | episode: {self.episode_ctr} | reward: {self.reward_value} ")
         print(f" | init_pos_err: {self.init_pos_err} | best_pos_err: {self.best_pos_err}")
         print(f" | init_rot_err: {self.init_rot_err} | best_rot_err: {self.best_rot_err}")
         print("=============================================================")
-
-        # 重置目标位姿
-        self.update_target_pose()
-
-        self.episode_ctr = self.episode_ctr + 1
-        # 重置相机位姿
-        if self.episode_ctr % 50 == 0:
-            self.T_camera_world = generate_perturbed_transform(
-                base_transform=self.T_camera_world,
-                translation_error_range=(-0.5, 0.5),
-                rotation_error_range=(-45, 45),
-                rotation_mode='euler',
-            )
         self.best_pos_err = None
         self.best_rot_err = None
         self.reward_value = 0.0
+
+        if self.reset_policy_choice==1:
+            # 重置目标位姿
+            self.update_target_pose()
+            # 重置相机位姿
+            if self.episode_ctr % self.camera_reset_episodes == 0:
+                self.update_camera_pose()
+                print("\n=============================================================")
+                print(f" reset camera pose | episode: {self.episode_ctr} | steps: {self.total_steps}")
+                print("=============================================================")
+        elif self.reset_policy_choice==2:
+            # 重置相机位姿
+            self.update_camera_pose()
+            # 重置目标位姿
+            if self.episode_ctr % self.camera_reset_episodes == 0:
+                self.update_target_pose()
+                print("\n=============================================================")
+                print(f" reset target pose | episode: {self.episode_ctr} | steps: {self.total_steps}")
+                print("=============================================================")
 
         return observation 
 
@@ -306,29 +342,29 @@ class ReachEnv(SingleArmEnv):
 
         # pos err
         if self.pos_err > self.init_pos_err:
-            pos_err_reward = -5.0 + 0.1 * (1-np.tanh(self.pos_err)) - 0.4 * self.pos_err
-        elif self.pos_err > pos_err_threshold:
-            pos_err_reward = 0.1 * (1-np.tanh(self.pos_err)) - 0.4 * self.pos_err
+            pos_err_reward -= 5.0
+        if self.pos_err > pos_err_threshold:
+            pos_err_reward += (5.0 * (1-np.tanh(self.pos_err)))
         else:
-            pos_err_reward = 10 - np.log(0.1*self.pos_err+1e-7)
+            pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
         
         # rot err
         if self.rot_err > self.init_rot_err:
-            rot_err_reward = -5.0 + 0.1 * (1-np.tanh(0.5*self.rot_err)) - 0.4 * self.rot_err
-        elif self.rot_err > rot_err_threshold:
-            rot_err_reward = 0.1 * (1-np.tanh(0.5*self.rot_err)) - 0.4 * self.rot_err
+            rot_err_reward -= 5.0
+        if self.rot_err > rot_err_threshold:
+            rot_err_reward += (5.0 * (1-np.tanh(0.5*self.rot_err)))
         else:
-            rot_err_reward = 10 - np.log(0.1*self.rot_err+1e-7)
+            rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
         
         # pose err
         if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):
             pose_err_reward = 1000.0
         
         # action Penalty
-        action_penalty = -0.01 * np.linalg.norm(action)
+        action_penalty = -0.1 * np.linalg.norm(action)
 
         # joint vel penalty
-        vel_penalty = -0.01 * np.linalg.norm(self.get_robot_joint_velocities())
+        vel_penalty = -0.1 * np.linalg.norm(self.get_robot_joint_velocities())
 
         # reward
         reward_value = (
@@ -338,6 +374,13 @@ class ReachEnv(SingleArmEnv):
             action_penalty + 
             vel_penalty
         )
+
+        self.total_steps = self.total_steps + 1
+        self.writer.add_scalar("Error/Position", pos_err_reward, self.total_steps)
+        self.writer.add_scalar("Error/Orientation", rot_err_reward, self.total_steps)
+        self.writer.add_scalar("Error/ActionPenalty", action_penalty, self.total_steps)
+        self.writer.add_scalar("Error/VelocityPenalty", vel_penalty, self.total_steps)
+
         self.reward_value += reward_value
         return reward_value
 

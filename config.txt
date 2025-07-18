@@ -1,3 +1,14 @@
+
+conda create -n rlreach python=3.8
+
+conda activate rlreach
+
+cd robosuite
+
+pip3 install -r requirements.txt --no-build-isolation
+
 pip3 install torch torchvision torchaudio
-pip install robosuite==1.4.0 skrl==1.4.3 jupyter gym==0.26.2 tqdm typeguard omegaconf tensorboard==2.14.0 h5py
+
+pip install skrl==1.4.3 jupyter gym==0.26.2 tqdm typeguard omegaconf tensorboard==2.14.0 h5py protobuf==3.20.3
+
 pip install hydra-core --upgrade
