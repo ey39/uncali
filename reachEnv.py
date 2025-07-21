@@ -46,6 +46,8 @@ class ReachEnv(SingleArmEnv):
                  horizon=200,
                  reward_shaping=True,
                  seed=123,
+                 train_type="pose",
+                 reset_policy_choice=2,
                  **kwargs):
         
         # 创建 Panda 机械臂
@@ -103,10 +105,12 @@ class ReachEnv(SingleArmEnv):
         self.camera_reset_episodes = 10
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         # 构造日志目录
-        log_dir = f"runs_reach/torch/reach_task/reach_task_{timestamp}"
+        log_dir = f"runs_reach/user/{timestamp}"
         self.writer = SummaryWriter(log_dir=log_dir)
         self.total_steps = 0
-        self.reset_policy_choice = 1
+        self.reset_policy_choice = reset_policy_choice
+
+        self.train_type = train_type
 
     def _load_model(self):
         self.frame_definitions = {}
@@ -248,8 +252,7 @@ class ReachEnv(SingleArmEnv):
             self.init_rot_err = error_info['rotation_error_angle']
             if (self.init_pos_err > self.pos_err_threshold) and (self.init_rot_err > self.rot_err_threshold):
                 break
-        
-    
+         
     def set_camera_pose(self, T_camera_world):
         """
         设置世界坐标系下相机位姿
@@ -268,7 +271,6 @@ class ReachEnv(SingleArmEnv):
         }
         return poses 
 
-
     def _setup_observables(self):
         observables = super()._setup_observables()
 
@@ -283,11 +285,11 @@ class ReachEnv(SingleArmEnv):
         # 转换为gym风格的observation
         observation = obs_dict
         self.episode_ctr = self.episode_ctr + 1
-        print("\n=============================================================")
-        print(f" | episode: {self.episode_ctr} | reward: {self.reward_value} ")
-        print(f" | init_pos_err: {self.init_pos_err} | best_pos_err: {self.best_pos_err}")
-        print(f" | init_rot_err: {self.init_rot_err} | best_rot_err: {self.best_rot_err}")
-        print("=============================================================")
+        # print("\n=============================================================")
+        # print(f" | episode: {self.episode_ctr} | reward: {self.reward_value} ")
+        # print(f" | init_pos_err: {self.init_pos_err} | best_pos_err: {self.best_pos_err}")
+        # print(f" | init_rot_err: {self.init_rot_err} | best_rot_err: {self.best_rot_err}")
+        # print("=============================================================")
         self.best_pos_err = None
         self.best_rot_err = None
         self.reward_value = 0.0
@@ -298,18 +300,18 @@ class ReachEnv(SingleArmEnv):
             # 重置相机位姿
             if self.episode_ctr % self.camera_reset_episodes == 0:
                 self.update_camera_pose()
-                print("\n=============================================================")
-                print(f" reset camera pose | episode: {self.episode_ctr} | steps: {self.total_steps}")
-                print("=============================================================")
+                # print("\n=============================================================")
+                # print(f" reset camera pose | episode: {self.episode_ctr} | steps: {self.total_steps}")
+                # print("=============================================================")
         elif self.reset_policy_choice==2:
             # 重置相机位姿
             self.update_camera_pose()
             # 重置目标位姿
             if self.episode_ctr % self.camera_reset_episodes == 0:
                 self.update_target_pose()
-                print("\n=============================================================")
-                print(f" reset target pose | episode: {self.episode_ctr} | steps: {self.total_steps}")
-                print("=============================================================")
+                # print("\n=============================================================")
+                # print(f" reset target pose | episode: {self.episode_ctr} | steps: {self.total_steps}")
+                # print("=============================================================")
 
         return observation 
 
@@ -321,8 +323,6 @@ class ReachEnv(SingleArmEnv):
         自定义奖励函数
         '''
         # 计算位置和姿态误差
-        pos_err_threshold = self.pos_err_threshold    
-        rot_err_threshold = self.rot_err_threshold     
         T_target_camera = self.get_target_pose()
         T_tool_camera = self.get_tool_pose()
         error_info = calculate_pose_error(T_target_camera, T_tool_camera, angle_unit='radians')
@@ -341,30 +341,36 @@ class ReachEnv(SingleArmEnv):
         action_penalty, vel_penalty = 0.0, 0.0
 
         # pos err
-        if self.pos_err > self.init_pos_err:
-            pos_err_reward -= 5.0
-        if self.pos_err > pos_err_threshold:
-            pos_err_reward += (5.0 * (1-np.tanh(self.pos_err)))
-        else:
-            pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
+        if self.train_type == "pose" or self.train_type == "pos":
+            pos_err_threshold = self.pos_err_threshold
+            if self.pos_err > self.init_pos_err:
+                pos_err_reward -= 5.0
+            if self.pos_err > pos_err_threshold:
+                pos_err_reward += (5.0 * (1-np.tanh(self.pos_err)))
+            else:
+                pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
         
         # rot err
-        if self.rot_err > self.init_rot_err:
-            rot_err_reward -= 5.0
-        if self.rot_err > rot_err_threshold:
-            rot_err_reward += (5.0 * (1-np.tanh(0.5*self.rot_err)))
-        else:
-            rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
+        if self.train_type == "pose" or self.train_type == "rot":
+            rot_err_threshold = self.rot_err_threshold
+            if self.rot_err > self.init_rot_err:
+                rot_err_reward -= 5.0
+            if self.rot_err > rot_err_threshold:
+                rot_err_reward += (5.0 * (1-np.tanh(0.5*self.rot_err)))
+            else:
+                rot_err_reward += (10.0 + np.exp(1e-1 / (self.rot_err+1e-5)))
+                # rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
         
         # pose err
-        if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):
-            pose_err_reward = 1000.0
+        if self.train_type == "pose":
+            if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):
+                pose_err_reward = 1000.0
         
         # action Penalty
-        action_penalty = -0.1 * np.linalg.norm(action)
+        action_penalty = -0.01 * np.linalg.norm(action)
 
         # joint vel penalty
-        vel_penalty = -0.1 * np.linalg.norm(self.get_robot_joint_velocities())
+        vel_penalty = -0.01 * np.linalg.norm(self.get_robot_joint_velocities())
 
         # reward
         reward_value = (
@@ -376,8 +382,10 @@ class ReachEnv(SingleArmEnv):
         )
 
         self.total_steps = self.total_steps + 1
-        self.writer.add_scalar("Error/Position", pos_err_reward, self.total_steps)
-        self.writer.add_scalar("Error/Orientation", rot_err_reward, self.total_steps)
+        self.writer.add_scalar("Error/Position", self.pos_err, self.total_steps)
+        self.writer.add_scalar("Error/Orientation", self.rot_err, self.total_steps)
+        self.writer.add_scalar("Error/BestPosErr", self.best_pos_err, self.total_steps)
+        self.writer.add_scalar("Error/BestRotErr", self.best_rot_err, self.total_steps)
         self.writer.add_scalar("Error/ActionPenalty", action_penalty, self.total_steps)
         self.writer.add_scalar("Error/VelocityPenalty", vel_penalty, self.total_steps)
 
@@ -452,6 +460,7 @@ class ReachEnv(SingleArmEnv):
         print(f"pos_err:{pos_err} rot_err:{rot_err}")
 
         print("=============================================================")
+
         
 class ReachEnvWrapper(gym.Wrapper):
     def __init__(self, env):
@@ -494,12 +503,14 @@ class ReachEnvWrapper(gym.Wrapper):
             "observation": np.concatenate([pos_t_c, quat_t_c]),
         }
     
-    
-        
-
-def generate_env():
+def generate_env(seed=42, train_type="pose", reset_policy_choice=2):
     controller_config = load_controller_config(default_controller="OSC_POSE")
-    env = ReachEnv(controller_config=controller_config,seed=42)
+    env = ReachEnv(
+        controller_config=controller_config, 
+        seed=seed,
+        train_type=train_type,
+        reset_policy_choice=reset_policy_choice,
+    )
     env = GymWrapper(env)
     env = ReachEnvWrapper(env)
     env = wrap_env(env, wrapper="gym")
@@ -594,7 +605,7 @@ def generate_agent(env):
     # logging to TensorBoard and write checkpoints (in timesteps)
     cfg["experiment"]["write_interval"] = 75
     cfg["experiment"]["checkpoint_interval"] = 10000
-    cfg["experiment"]["directory"] = "runs_reach/torch/reach"
+    cfg["experiment"]["directory"] = "runs_reach/skrl"
 
     agent = SAC(models=models,
                 memory=memory,
@@ -608,6 +619,7 @@ def generate_agent(env):
 def train():
     # configure and instantiate the RL trainer
     cfg_trainer = {"timesteps": 100000, "headless": True}
+    env = generate_env()
     agent = generate_agent()
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=[agent])
     # start training

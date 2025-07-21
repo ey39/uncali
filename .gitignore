@@ -1,3 +1,7 @@
 runs_reach/
 __pycache__/
 dependents/
+sb3/__pycache__/
+sb3/build/
+sb3/install/
+sb3/log/
