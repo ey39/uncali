@@ -2,9 +2,9 @@ runs_reach/
 __pycache__/
 dependents/
 sb3/__pycache__/
-sb3/build/
-sb3/install/
-sb3/log/
+sb3/ros2/build/
+sb3/ros2/install/
+sb3/ros2/log/
 sb3/models/
 sb3/wandb/
 sb3/db/

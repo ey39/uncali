@@ -11,6 +11,7 @@ from envUtils import *
 
 TASK="Reach"
 experiment_name = TASK + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+LOGDIR=f"db/{experiment_name}"
 os.environ["WANDB_MODE"]="offline"
 
 training_config = {
@@ -25,11 +26,11 @@ training_config = {
     "gamma": 0.99,                      # 
     "ent_coef": "auto",                 #
     "device": "cuda",                   # 设备
-    "n_envs": 5,                        # 同时训练环境数
+    "n_envs": 1,                        # 同时训练环境数
     "seed": 42,                         # 随机种子
 }
 
-controller_fpath = "/home/ey/rl/src/rlreach2/rlreach/sb3/reachController.json"
+controller_fpath = "./reachController.json"
 env_config = {
     "robots": ["UR5e"],                 # 机器人
     "controller_configs": load_composite_controller_config(controller=controller_fpath),
@@ -44,6 +45,7 @@ env_config = {
     "reward_scale": 1.0,                # 奖励放缩
     "use_object_obs": False,            # 障碍物
     "n_env": 1,                         # 环境编号
+    "log_dir": LOGDIR,
 }
 
 if __name__ == '__main__':
@@ -54,7 +56,7 @@ if __name__ == '__main__':
         config=training_config,
         sync_tensorboard=True,
         save_code=True,
-        dir=f"db/wandb/{experiment_name}"
+        dir=f"{LOGDIR}/wandb"
     )
     # 构建环境
     vec_env = SubprocVecEnv([lambda i=i: make_env(env_config,n_env=i) for i in range(training_config["n_envs"])])
@@ -71,7 +73,7 @@ if __name__ == '__main__':
             net_arch=training_config["net_arch"],
             activation_fn=training_config["activation_fn"],
         ),
-        tensorboard_log=f"db/train/{experiment_name}/{run.id}",
+        tensorboard_log=f"{LOGDIR}/{run.id}/train",
         seed=training_config["seed"],
         verbose=1,
     )
@@ -82,13 +84,13 @@ if __name__ == '__main__':
         progress_bar=True,
         callback=[
             WandbCallback(
-                model_save_path=f"db/models/{experiment_name}/{run.id}",
+                model_save_path=f"{LOGDIR}/{run.id}/models",
                 model_save_freq=10_000,
                 verbose=2,
             ), 
             EvalCallback(
                 eval_env=vec_env,
-                best_model_save_path=f"db/models/{experiment_name}/{run.id}",
+                best_model_save_path=f"{LOGDIR}/{run.id}/models",
                 eval_freq=500_000,
                 deterministic=True,
                 render=False,
@@ -107,7 +109,7 @@ if __name__ == '__main__':
     env = make_env(env_config)
     state_size = env.unwrapped.sim.get_state().flatten().shape
     # 加载模型
-    model = SAC.load(f"db/models/{experiment_name}/{run.id}/best_model.zip", env=env)
+    model = SAC.load(f"{LOGDIR}/{run.id}/models/best_model.zip", env=env)
     # 测试模型
     success = 0
     obs = env.reset()

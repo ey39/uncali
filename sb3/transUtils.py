@@ -437,3 +437,31 @@ def normalize_quaternion(quaternion):
         # 如果四元数为零，返回单位四元数
         return np.array([0., 0., 0., 1.])
     return quaternion / norm
+
+def is_point_in_cylinder(base_center, axis_vector, radius, height, point):
+    """
+    判断一个点是否在任意朝向的有限高圆柱体内
+
+    参数:
+    - base_center: np.array([x, y, z]) 圆柱底面中心
+    - axis_vector: np.array([x, y, z]) 圆柱轴向（可以不是单位向量）
+    - radius: float 圆柱半径
+    - height: float 圆柱高度
+    - point: np.array([x, y, z]) 被判断的点
+
+    返回:
+    - bool: 是否在圆柱体内
+    """
+    axis = axis_vector / np.linalg.norm(axis_vector)  # 单位向量
+    vec_to_point = point - base_center
+
+    # 投影在轴向上的距离（判断是否在高度范围内）
+    projection_length = np.dot(vec_to_point, axis)
+    if projection_length < 0 or projection_length > height:
+        return False
+
+    # 计算点到轴线的垂直距离（判断是否在半径范围内）
+    projection_point = base_center + projection_length * axis
+    radial_distance = np.linalg.norm(point - projection_point)
+    return radial_distance <= radius
+

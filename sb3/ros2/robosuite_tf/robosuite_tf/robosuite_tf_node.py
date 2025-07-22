@@ -14,7 +14,7 @@ def main(args=None):
     executor.add_node(node)
 
     node.get_logger().info("Hello world.")
-    channel = SharedMemoryChannel("chatbus")
+    channel = SharedMemoryChannel("chatbus_0")
     static_tf_pub = StaticTransformBroadcaster(node)
 
     try:

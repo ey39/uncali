@@ -43,6 +43,7 @@ class ReachEnv(ManipulationEnv):
                  reward_scale=1.0,              # 奖励放缩尺度
                  use_object_obs=False,          # 相机观察障碍物
                  n_env=1,
+                 log_dir="db/default",
                  **kwargs):
         
         # 使用robosuite创建环境
@@ -86,12 +87,12 @@ class ReachEnv(ManipulationEnv):
             translation_error_range=(-self.pos_range, self.pos_range),
             rotation_error_range=(-self.rot_range, self.rot_range),
             rotation_mode='euler',
-            seed=42,   
+            seed=self.seed,   
         )
         
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    # 构造日志目录
-        log_dir = f"db/user/{timestamp}_{n_env}"
-        self.writer = SummaryWriter(log_dir=log_dir)
+        # timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    # 构造日志目录
+        self.log_dir = f"{log_dir}/user/env_{n_env}"
+        self.writer = SummaryWriter(log_dir=self.log_dir)
         self.pos_err_threshold=0.03                     # 期望到达的误差
         self.rot_err_threshold=0.3
         self.channel = SharedMemoryChannel(f"chatbus_{n_env}")   #
@@ -220,13 +221,33 @@ class ReachEnv(ManipulationEnv):
         设置新的目标位姿
         """
         T_target_world = self.T_target_world
+        T_base_world = self.get_base_pose_w(verbose=verbose)
+        _, pos_b_w = homogeneous_matrix_to_quaternion(T_base_world)
         while True:
-            self.T_target_world = generate_perturbed_transform(
-                base_transform=self.get_end_pose_w(verbose=verbose),
-                translation_error_range=(-self.pos_range, self.pos_range),
-                rotation_error_range=(-self.rot_range, self.rot_range),
+            self.T_target_world = generate_random_homogeneous_transform(
+                translation_range=[
+                    (pos_b_w[0]-0.8, pos_b_w[0]+0.8), 
+                    (pos_b_w[1]-0.8, pos_b_w[1]+0.8), 
+                    (pos_b_w[2]+0.1, pos_b_w[2]+0.9)
+                ],
                 rotation_mode='euler',
+                rotation_range=(-30, 30),
             )
+            _, pos_g_w = homogeneous_matrix_to_quaternion(self.T_target_world)
+            if is_point_in_cylinder(
+                base_center=pos_b_w, 
+                axis_vector=np.array([0, 0, 1]),
+                radius=0.2, 
+                height=1.0, 
+                point=pos_g_w,
+            ):
+                continue
+            # self.T_target_world = generate_perturbed_transform(
+            #     base_transform=self.get_end_pose_w(verbose=verbose),
+            #     translation_error_range=(-self.pos_range, self.pos_range),
+            #     rotation_error_range=(-self.rot_range, self.rot_range),
+            #     rotation_mode='euler',
+            # )
             T_target_camera = self.get_goal_pose_c(verbose=verbose)
             T_tool_camera = self.get_tool_pose_c(verbose=verbose)
             error_info = calculate_pose_error(T_target_camera, T_tool_camera, angle_unit='radians')
@@ -247,8 +268,8 @@ class ReachEnv(ManipulationEnv):
         T_camera_world = self.T_camera_world
         while True:
             self.T_camera_world = generate_perturbed_transform(
-                base_transform=self.T_camera_world,
-                translation_error_range=(-0.5, 0.5),
+                base_transform=self.get_base_pose_w(),
+                translation_error_range=(0.4, 0.6),
                 rotation_error_range=(-45, 45),
                 rotation_mode='euler',
             )
@@ -292,25 +313,28 @@ class ReachEnv(ManipulationEnv):
             pos_err_threshold = self.pos_err_threshold
             if self.pos_err > self.init_pos_err:
                 pos_err_reward -= 5.0
-            if self.pos_err > pos_err_threshold:
-                pos_err_reward += (5.0 * (1-np.tanh(self.pos_err)))
-            else:
+            
+            pos_err_reward += 0.1 * (1-np.tanh(self.pos_err)) - 0.4 * self.pos_err
+            if self.pos_err <= pos_err_threshold:
                 # pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
-                pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
+                # pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
+                pos_err_reward += 100.0 * (1-np.tanh(self.pos_err))
         # rot err
         if self.train_type == "pose" or self.train_type == "rot":
             rot_err_threshold = self.rot_err_threshold
             if self.rot_err > self.init_rot_err:
                 rot_err_reward -= 5.0
-            if self.rot_err > rot_err_threshold:
-                rot_err_reward += (5.0 * (1-np.tanh(0.5*self.rot_err)))
-            else:
+            
+            rot_err_reward += 0.1 * (1-np.tanh(0.5*self.rot_err)) - 0.2 * self.rot_err
+            if self.rot_err <= rot_err_threshold:
                 # rot_err_reward += (10.0 + np.exp(1e-1 / (self.rot_err+1e-5)))
-                rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
+                # rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
+                rot_err_reward += 100.0 * (1-np.tanh(0.5*self.rot_err))
         # pose err
         if self.train_type == "pose":
             if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):
                 pose_err_reward = 1000.0
+
         # action Penalty
         action_penalty = -0.01 * np.linalg.norm(action)
         # joint vel penalty
@@ -320,6 +344,14 @@ class ReachEnv(ManipulationEnv):
             pos_err_reward + rot_err_reward + pose_err_reward + 
             action_penalty + vel_penalty
         )
+
+        self.writer.add_scalar("Reward/Reward_PosErr", pos_err_reward, self.steps_ctr)
+        self.writer.add_scalar("Reward/Reward_RotErr", rot_err_reward, self.steps_ctr)
+        self.writer.add_scalar("Reward/Reward_PoseErr", pose_err_reward, self.steps_ctr)
+        self.writer.add_scalar("Reward/Penalty_Action", action_penalty, self.steps_ctr)
+        self.writer.add_scalar("Reward/Penalty_Velocity", vel_penalty, self.steps_ctr)
+        self.writer.add_scalar("Reward/InstaneousReward", reward_value, self.steps_ctr)
+
         return reward_value
 
     def reset(self, seed=None, options=None):
@@ -329,6 +361,8 @@ class ReachEnv(ManipulationEnv):
         # 调用父类reset
         obs_dict = super().reset()
         # 重置参数
+        if self.episodes_ctr > 1:
+            self.writer.add_scalar("Reward/TotalReward", self.episode_reward, self.steps_ctr)
         self.episodes_ctr = self.episodes_ctr + 1
         self.best_pos_err = None
         self.best_rot_err = None
@@ -377,8 +411,6 @@ class ReachEnv(ManipulationEnv):
         self.writer.add_scalar("Error/Orientation", self.rot_err, self.steps_ctr)
         self.writer.add_scalar("Error/BestPosErr", self.best_pos_err, self.steps_ctr)
         self.writer.add_scalar("Error/BestRotErr", self.best_rot_err, self.steps_ctr)
-        self.writer.add_scalar("Reward/InstaneousReward", reward_value, self.steps_ctr)
-        self.writer.add_scalar("Reward/TotalReward", self.episode_reward, self.steps_ctr)
         
         self.episode_reward += reward_value
         return reward_value
