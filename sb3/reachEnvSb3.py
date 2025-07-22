@@ -1,6 +1,6 @@
-
+# ===================numpy==========================
 import numpy as np
-
+# ===================robosuite======================
 import robosuite as suite
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.tasks import ManipulationTask
@@ -14,15 +14,15 @@ import xml.etree.ElementTree as ET
 import robosuite.utils.transform_utils as T
 from robosuite.utils.observables import Observable, sensor
 from robosuite.wrappers import GymWrapper
-
-from reachUtils import *
+# ===================user=========================
+from transUtils import *
 from shmUtils import SharedMemoryChannel
-# ===================torch======================
+# ===================torch========================
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-# ===================datatime====================
+# ===================datatime=====================
 from datetime import datetime
 
 # ===============================================
@@ -30,23 +30,30 @@ from datetime import datetime
 # ===============================================
 class ReachEnv(ManipulationEnv):
     def __init__(self,
-                 controller_config=None,
-                 has_renderer=True,
-                 reward_shaping=True,       # 稀疏奖励 or 连续奖励
-                 seed=42,                   # 随机种子
-                 train_type="pose",
-                 reset_policy=2,
+                 robots=["UR5e"],               # 机器人
+                 controller_configs=None,        # 控制器
+                 has_renderer=True,             # ui渲染
+                 has_offscreen_renderer=False,
+                 reward_shaping=True,           # 稀疏奖励/连续奖励
+                 horizon=200,                   # 每回合时间步
+                 control_freq=20,               # 控制频率
+                 seed=42,                       # 随机种子
+                 train_type="pose",             # 训练类型
+                 reset_policy=2,                # 重置策略
+                 reward_scale=1.0,              # 奖励放缩尺度
+                 use_object_obs=False,          # 相机观察障碍物
+                 n_env=1,
                  **kwargs):
         
         # 使用robosuite创建环境
         super().__init__(
-            robots=["UR5e"],
-            controller_configs=controller_config,
+            robots=robots,
+            controller_configs=controller_configs,
             has_renderer=has_renderer,
-            has_offscreen_renderer=False,
+            has_offscreen_renderer=has_offscreen_renderer,
             use_camera_obs=False,
-            control_freq=20,
-            horizon=200,
+            control_freq=control_freq,
+            horizon=horizon,
             gripper_types=None,
             **kwargs
         )
@@ -55,6 +62,8 @@ class ReachEnv(ManipulationEnv):
         self.seed=seed
         self.train_type = train_type
         self.reset_policy = reset_policy
+        self.reward_scale = reward_scale
+        self.use_object_obs = use_object_obs
         
         # 初始化世界坐标系下相机位姿
         self.T_camera_world = generate_random_homogeneous_transform(
@@ -81,11 +90,11 @@ class ReachEnv(ManipulationEnv):
         )
         
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    # 构造日志目录
-        log_dir = f"runs_reach/user/{timestamp}"
+        log_dir = f"db/user/{timestamp}_{n_env}"
         self.writer = SummaryWriter(log_dir=log_dir)
         self.pos_err_threshold=0.03                     # 期望到达的误差
         self.rot_err_threshold=0.3
-        self.channel = SharedMemoryChannel("chatbus")   #
+        self.channel = SharedMemoryChannel(f"chatbus_{n_env}")   #
         self.episodes_ctr = 0       # 计数器
         self.epochs_ctr = 0
         self.steps_ctr = 0
@@ -286,8 +295,8 @@ class ReachEnv(ManipulationEnv):
             if self.pos_err > pos_err_threshold:
                 pos_err_reward += (5.0 * (1-np.tanh(self.pos_err)))
             else:
-                pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
-                # pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
+                # pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
+                pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
         # rot err
         if self.train_type == "pose" or self.train_type == "rot":
             rot_err_threshold = self.rot_err_threshold
@@ -296,8 +305,8 @@ class ReachEnv(ManipulationEnv):
             if self.rot_err > rot_err_threshold:
                 rot_err_reward += (5.0 * (1-np.tanh(0.5*self.rot_err)))
             else:
-                rot_err_reward += (10.0 + np.exp(1e-1 / (self.rot_err+1e-5)))
-                # rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
+                # rot_err_reward += (10.0 + np.exp(1e-1 / (self.rot_err+1e-5)))
+                rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
         # pose err
         if self.train_type == "pose":
             if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):
@@ -320,18 +329,18 @@ class ReachEnv(ManipulationEnv):
         # 调用父类reset
         obs_dict = super().reset()
         # 重置参数
-        self.episode_ctr = self.episode_ctr + 1
+        self.episodes_ctr = self.episodes_ctr + 1
         self.best_pos_err = None
         self.best_rot_err = None
         self.episode_reward = 0.0
         # 更新
         if self.reset_policy == 1:
             self.update_goal_pose()
-            if self.episode_ctr % self.reset_episodes_num == 0:
+            if self.episodes_ctr % self.reset_episodes_num == 0:
                 self.update_camera_pose()
         elif self.reset_policy == 2:
             self.update_camera_pose()
-            if self.episode_ctr % self.reset_episodes_num == 0:
+            if self.episodes_ctr % self.reset_episodes_num == 0:
                 self.update_goal_pose()
 
         return obs_dict 
@@ -363,11 +372,13 @@ class ReachEnv(ManipulationEnv):
         if self.reward_shaping:
             reward_value = self.cal_reward_value(action=action)
 
-        self.total_steps = self.total_steps + 1
-        self.writer.add_scalar("Error/Position", self.pos_err, self.total_steps)
-        self.writer.add_scalar("Error/Orientation", self.rot_err, self.total_steps)
-        self.writer.add_scalar("Error/BestPosErr", self.best_pos_err, self.total_steps)
-        self.writer.add_scalar("Error/BestRotErr", self.best_rot_err, self.total_steps)
+        self.steps_ctr = self.steps_ctr + 1
+        self.writer.add_scalar("Error/Position", self.pos_err, self.steps_ctr)
+        self.writer.add_scalar("Error/Orientation", self.rot_err, self.steps_ctr)
+        self.writer.add_scalar("Error/BestPosErr", self.best_pos_err, self.steps_ctr)
+        self.writer.add_scalar("Error/BestRotErr", self.best_rot_err, self.steps_ctr)
+        self.writer.add_scalar("Reward/InstaneousReward", reward_value, self.steps_ctr)
+        self.writer.add_scalar("Reward/TotalReward", self.episode_reward, self.steps_ctr)
         
         self.episode_reward += reward_value
         return reward_value

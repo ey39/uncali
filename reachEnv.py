@@ -345,10 +345,11 @@ class ReachEnv(SingleArmEnv):
             pos_err_threshold = self.pos_err_threshold
             if self.pos_err > self.init_pos_err:
                 pos_err_reward -= 5.0
-            if self.pos_err > pos_err_threshold:
-                pos_err_reward += (5.0 * (1-np.tanh(self.pos_err)))
-            else:
-                pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
+            # 
+            pos_err_reward += 0.1 * (1-np.tanh(self.pos_err))
+            pos_err_reward -= 0.4 * self.pos_err
+            if self.pos_err < pos_err_threshold:
+                pos_err_reward += (100.0 * (1-np.tanh(self.pos_err)))
         
         # rot err
         if self.train_type == "pose" or self.train_type == "rot":
