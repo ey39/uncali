@@ -318,7 +318,7 @@ class ReachEnv(ManipulationEnv):
             if self.pos_err <= pos_err_threshold:
                 # pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
                 # pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
-                pos_err_reward += 100.0 * (1-np.tanh(self.pos_err))
+                pos_err_reward += 10.0 * (1-np.tanh(self.pos_err))
         # rot err
         if self.train_type == "pose" or self.train_type == "rot":
             rot_err_threshold = self.rot_err_threshold
@@ -329,7 +329,7 @@ class ReachEnv(ManipulationEnv):
             if self.rot_err <= rot_err_threshold:
                 # rot_err_reward += (10.0 + np.exp(1e-1 / (self.rot_err+1e-5)))
                 # rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
-                rot_err_reward += 100.0 * (1-np.tanh(0.5*self.rot_err))
+                rot_err_reward += 10.0 * (1-np.tanh(0.5*self.rot_err))
         # pose err
         if self.train_type == "pose":
             if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):

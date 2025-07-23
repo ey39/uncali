@@ -26,7 +26,7 @@ training_config = {
     "gamma": 0.99,                      # 
     "ent_coef": "auto",                 #
     "device": "cuda",                   # 设备
-    "n_envs": 1,                        # 同时训练环境数
+    "n_envs": 5,                        # 同时训练环境数
     "seed": 42,                         # 随机种子
 }
 
@@ -91,7 +91,7 @@ if __name__ == '__main__':
             EvalCallback(
                 eval_env=vec_env,
                 best_model_save_path=f"{LOGDIR}/{run.id}/models",
-                eval_freq=500_000,
+                eval_freq=50_000,
                 deterministic=True,
                 render=False,
             ),
@@ -100,7 +100,7 @@ if __name__ == '__main__':
                 eval_env=vec_env,
                 check_freq=500_000,
                 n_eval_episodes=5,
-                verbose=0
+                verbose=1
             )],
     )
     run.finish()
@@ -118,11 +118,11 @@ if __name__ == '__main__':
         obs = obs[0]
         for i in range(env_config["horizon"]):
             action, _ = model.predict(obs)
-            obs, reward, done, info = env.step(action)
-            if reward == 1:
+            obs, reward, terminated, truncated, info = env.step(action)
+            if info['success']:
                 success += 1
                 break
-            if done:
+            if terminated or truncated:
                 obs = env.reset()
     success_rate = success / 10
     print(f"Success rate on Reach:", success_rate)

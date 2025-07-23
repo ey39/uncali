@@ -25,15 +25,14 @@ class StopTrainingOnSuccessThreshold(BaseCallback):
             if isinstance(obs, tuple):
                 obs = obs[0]
             dones_table = np.full(self.eval_env.num_envs, False)
-            success_this_episode = False  
             while not all(dones_table):
                 action, _ = self.model.predict(obs, deterministic=True)
-                obs, _, dones, infos = self.eval_env.step(action)
+                obs, _, done, infos = self.eval_env.step(action)
                 for idx, info in enumerate(infos):
                     if info["success"]==True and dones_table[idx]==False:
                         successes.append(1)
                         dones_table[idx] = True   
-                    if dones_table[idx]==False and dones[idx]:
+                    if dones_table[idx]==False and done[idx]:
                         successes.append(0)
                         dones_table[idx] = True
 
@@ -42,6 +41,7 @@ class StopTrainingOnSuccessThreshold(BaseCallback):
         self.success_history.append(avg_success)
 
         if self.verbose:
+            print(f"[Callback] Success: {successes}")
             print(f"[Callback] Success rate over last {self.n_eval_episodes} episodes: {avg_success:.2f}")
 
         if avg_success >= self.success_threshold:
@@ -66,13 +66,16 @@ class ReachEnvWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         obs = self.env.reset(**kwargs)
         obs = self._process_obs(obs)
-        info = {}
-        return obs, info
+        infos = {
+            'success': False
+        }
+        return obs, infos
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         # 修改 observation
         obs = self._process_obs(obs)
+        info['success'] = self.unwrapped._check_success()
 
         return obs, reward, terminated, truncated, info
 
@@ -91,6 +94,7 @@ class ReachEnvWrapper(gym.Wrapper):
 
 def make_env(config, n_env=1):
     config['n_env']=n_env
+    config['seed']=config['seed']+n_env
     env = ReachEnv(**config)
     env = GymWrapper(env)
     env = ReachEnvWrapper(env)

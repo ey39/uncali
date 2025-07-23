@@ -10,11 +10,12 @@ from .shmUtils import SharedMemoryChannel, matrix_to_transform_stamped
 def main(args=None):
     rclpy.init(args=args) 
     node = Node("robosuite_tf_node")  
+    node.declare_parameter('channel', 'chatbus_0')
+
     executor = SingleThreadedExecutor()
     executor.add_node(node)
-
-    node.get_logger().info("Hello world.")
-    channel = SharedMemoryChannel("chatbus_0")
+    channelstr = node.get_parameter('channel').get_parameter_value().string_value
+    channel = SharedMemoryChannel(channelstr)
     static_tf_pub = StaticTransformBroadcaster(node)
 
     try:
