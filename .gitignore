@@ -8,3 +8,4 @@ sb3/ros2/log/
 sb3/models/
 sb3/wandb/
 sb3/db/
+ray/db/
