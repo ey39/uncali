@@ -16,7 +16,7 @@ from robosuite.utils.observables import Observable, sensor
 from robosuite.wrappers import GymWrapper
 # ===================user=========================
 from .transUtils import *
-from .shmUtils import SharedMemoryChannel
+from .shmUtils import SharedMemoryChannel, shared_memory_exists
 # ===================torch========================
 import torch
 import torch.nn as nn
@@ -91,10 +91,14 @@ class ReachEnv(ManipulationEnv):
         )
         
         # timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    # 构造日志目录
+        while shared_memory_exists(f"chatbus_{n_env}"):
+            n_env += 1
         self.log_dir = f"{log_dir}/user/env_{n_env}"
         self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.pos_err_threshold=0.03                     # 期望到达的误差
+        self.pos_err_threshold=0.3                     # 初始期望到达的误差
+        self.final_pos_err_threshold = 0.005
         self.rot_err_threshold=0.3
+        self.final_rot_err_threshold = 0.01
         self.channel = SharedMemoryChannel(f"chatbus_{n_env}")   #
         self.episodes_ctr = 0       # 计数器
         self.epochs_ctr = 0
@@ -309,18 +313,20 @@ class ReachEnv(ManipulationEnv):
         # panelty items
         action_penalty, vel_penalty = 0.0, 0.0
         # pos err
-        if self.train_type == "pose" or self.train_type == "pos":
+        if self.train_type == "pos":
             pos_err_threshold = self.pos_err_threshold
             if self.pos_err > self.init_pos_err:
+                # pos_err_reward -= 5.0
                 pos_err_reward -= 5.0
-            
-            pos_err_reward += 0.1 * (1-np.tanh(self.pos_err)) - 0.4 * self.pos_err
-            if self.pos_err <= pos_err_threshold:
-                # pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
-                # pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
-                pos_err_reward += 10.0 * (1-np.tanh(self.pos_err))
+            else:
+                if self.pos_err <= pos_err_threshold:
+                    # pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
+                    # pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
+                    pos_err_reward += 50.0 * (1 - np.tanh(10.0 * self.pos_err))
+                else:
+                    pos_err_reward += 0.1 * (1-np.tanh(self.pos_err)) - self.pos_err
         # rot err
-        if self.train_type == "pose" or self.train_type == "rot":
+        if self.train_type == "rot":
             rot_err_threshold = self.rot_err_threshold
             if self.rot_err > self.init_rot_err:
                 rot_err_reward -= 5.0
@@ -345,6 +351,8 @@ class ReachEnv(ManipulationEnv):
             action_penalty + vel_penalty
         )
 
+        self.writer.add_scalar("Reward/Position_Err_Threshold", self.pos_err_threshold, self.steps_ctr)
+        self.writer.add_scalar("Reward/Rotation_Err_Threshold", self.rot_err_threshold, self.steps_ctr)
         self.writer.add_scalar("Reward/Reward_PosErr", pos_err_reward, self.steps_ctr)
         self.writer.add_scalar("Reward/Reward_RotErr", rot_err_reward, self.steps_ctr)
         self.writer.add_scalar("Reward/Reward_PoseErr", pose_err_reward, self.steps_ctr)
@@ -364,6 +372,8 @@ class ReachEnv(ManipulationEnv):
         if self.episodes_ctr > 1:
             self.writer.add_scalar("Reward/TotalReward", self.episode_reward, self.steps_ctr)
         self.episodes_ctr = self.episodes_ctr + 1
+        if (self.episodes_ctr % 10 == 0) and (self.final_pos_err_threshold < self.pos_err_threshold):
+            self.pos_err_threshold *= 0.999
         self.best_pos_err = None
         self.best_rot_err = None
         self.episode_reward = 0.0

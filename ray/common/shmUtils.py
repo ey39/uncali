@@ -47,6 +47,17 @@ class SharedMemoryChannel:
         if self.is_owner:
             self.shm.unlink()
 
+def shared_memory_exists(name: str) -> bool:
+    try:
+        shm = shared_memory.SharedMemory(name=name, create=False)
+        shm.close()  # 记得关闭句柄
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception as e:
+        print(f"Unexpected error when checking shared memory: {e}")
+        return False
+
 if __name__ == '__main__':
     '''
     recv
