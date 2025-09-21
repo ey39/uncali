@@ -187,6 +187,28 @@ def generate_perturbed_transform(
     T_new[:3, 3] = t_new
     return T_new
 
+def calculate_pos_error(t1, t2):
+    translation_error = t2 - t1
+    translation_magnitude = np.linalg.norm(translation_error)
+    return translation_magnitude
+
+def calculate_rot_error(r1, r2, angle_unit='degrees'):
+    R1 = Rotation.from_rotvec(r1).as_matrix()
+    R2 = Rotation.from_rotvec(r2).as_matrix()
+    R_error = R2 @ R1.T
+    
+    # 使用scipy计算旋转误差
+    rot_error = Rotation.from_matrix(R_error)
+    
+    # 提取旋转误差的轴角表示
+    rotvec = rot_error.as_rotvec()
+    rotation_error_angle = np.linalg.norm(rotvec)
+    
+    # 转换角度单位
+    if angle_unit == 'degrees':
+        rotation_error_angle = np.degrees(rotation_error_angle)
+    return rotation_error_angle
+
 def calculate_pose_error(T1, T2, angle_unit='degrees'):
     """
     计算两个齐次变换矩阵之间的位姿误差
@@ -375,6 +397,33 @@ def homogeneous_matrix_to_quaternion(transform_matrix, quaternion_format='xyzw')
     
     return quaternion, translation
 
+def homogeneous_matrix_to_axisangle(transform_matrix):
+    """
+    将齐次变换矩阵转换为轴角和平移向量
+    
+    Parameters:
+    -----------
+    transform_matrix : numpy.ndarray
+        4x4齐次变换矩阵
+    
+    Returns:
+    --------
+    tuple
+        (axisangle, translation) 其中：
+        - axisangle: 轴角 [rx, ry, rz]
+        - translation: 平移向量 [x,y,z]
+    """
+    transform_matrix = np.array(transform_matrix)
+    
+    # 提取旋转矩阵和平移向量
+    rotation_matrix = transform_matrix[:3, :3]
+    translation = transform_matrix[:3, 3]
+    
+    # 转换为四元数
+    rotation = Rotation.from_matrix(rotation_matrix)
+    axisangle = rotation.as_rotvec()
+    
+    return axisangle, translation
 
 def pose_to_homogeneous_matrix(position, quaternion):
     """
@@ -465,3 +514,20 @@ def is_point_in_cylinder(base_center, axis_vector, radius, height, point):
     radial_distance = np.linalg.norm(point - projection_point)
     return radial_distance <= radius
 
+from collections import deque
+
+class SuccessTracker:
+    def __init__(self, max_len):
+        self.max_len = max_len
+        self.history = deque(maxlen=self.max_len)
+
+    def add_result(self, success: bool):
+        self.history.append(success)
+
+    def success_rate(self) -> float:
+        if not self.history:
+            return 0.0
+        return sum(self.history) / len(self.history)
+    
+    def clear(self):
+        self.history.clear()

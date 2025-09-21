@@ -24,6 +24,9 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 # ===================datatime=====================
 from datetime import datetime
+# ===================global variable==============
+FinalPosErrThreshold=0.001                     
+FinalRotErrThreshold=0.001
 
 # ===============================================
 # |               environment                   |
@@ -58,14 +61,15 @@ class ReachEnv(ManipulationEnv):
             gripper_types=None,
             **kwargs
         )
-
+        
         self.reward_shaping=reward_shaping      
         self.seed=seed
         self.train_type = train_type
         self.reset_policy = reset_policy
         self.reward_scale = reward_scale
         self.use_object_obs = use_object_obs
-        
+
+        np.random.seed(self.seed) 
         # 初始化世界坐标系下相机位姿
         self.T_camera_world = generate_random_homogeneous_transform(
             translation_range=[(-0.5, 0.5), (-0.5, 0.5), (0.8, 1.3)],
@@ -75,7 +79,7 @@ class ReachEnv(ManipulationEnv):
         )
         # 初始化末端坐标系下工具位姿
         self.T_tool_end = generate_random_homogeneous_transform(
-            translation_range=[(-0.1, 0.1), (-0.1, 0.1), (0.1, 0.1)],
+            translation_range=[(-0.1, 0.1), (-0.1, 0.1), (0.0, 0.1)],
             rotation_mode='euler',
             rotation_range=(-45, 45),
         )
@@ -95,10 +99,10 @@ class ReachEnv(ManipulationEnv):
             n_env += 1
         self.log_dir = f"{log_dir}/user/env_{n_env}"
         self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.pos_err_threshold=0.3                     # 初始期望到达的误差
-        self.final_pos_err_threshold = 0.005
-        self.rot_err_threshold=0.3
-        self.final_rot_err_threshold = 0.01
+        self.pos_err_threshold=0.1                     
+        self.final_pos_err_threshold = FinalPosErrThreshold
+        self.rot_err_threshold=0.1
+        self.final_rot_err_threshold = FinalRotErrThreshold
         self.channel = SharedMemoryChannel(f"chatbus_{n_env}")   #
         self.episodes_ctr = 0       # 计数器
         self.epochs_ctr = 0
@@ -107,10 +111,22 @@ class ReachEnv(ManipulationEnv):
         self.init_rot_err = None
         self.best_pos_err = None
         self.best_rot_err = None
+        self.cur_best_pos_err = 1.0
+        self.cur_best_rot_err = 1.0
         self.episode_reward = 0.0
         
         self.reset_episodes_num = 10
+        self.pos_tracker = SuccessTracker(10)
+        self.rot_tracker = SuccessTracker(10)
+        self.pos_episode_succ = 0
+        self.rot_episode_succ = 0
 
+        self.joint_low = np.array([-0.470 - 1.0, -1.735, 2.480, -0.785, 1.590, -0.5])
+        self.joint_high = np.array([-0.470 + 1.0, -1.735, 2.480, -0.785, 1.590, 0.5])
+        self.margin = 0.1
+        # 给关节上下限预留 margin，避免到极限
+        self.joint_low = self.joint_low + self.margin * (self.joint_high - self.joint_low)
+        self.joint_high = self.joint_high - self.margin * (self.joint_high - self.joint_low)
 
     def _load_model(self):
         self.frame_definitions = {}
@@ -290,6 +306,13 @@ class ReachEnv(ManipulationEnv):
             print(f"变换位置初始误差:{self.init_pos_err}")
             print(f"变换角度初始误差:{self.init_rot_err}")
 
+    def update_tool_pose(self, verbose=False):
+        self.T_tool_end = generate_random_homogeneous_transform(
+            translation_range=[(-0.1, 0.1), (-0.1, 0.1), (0.0, 0.1)],
+            rotation_mode='euler',
+            rotation_range=(-45, 45),
+        )
+
     def update_tf(self):
         """
         将当前坐标树传给ros2包
@@ -307,44 +330,41 @@ class ReachEnv(ManipulationEnv):
             'T_goal_camera': T_gc,
         })
 
-    def cal_reward_value(self, action):
-        # reward items
-        pos_err_reward, rot_err_reward, pose_err_reward = 0.0, 0.0, 0.0
-        # panelty items
-        action_penalty, vel_penalty = 0.0, 0.0
-        # pos err
-        if self.train_type == "pos":
-            pos_err_threshold = self.pos_err_threshold
-            if self.pos_err > self.init_pos_err:
-                # pos_err_reward -= 5.0
-                pos_err_reward -= 5.0
-            else:
-                if self.pos_err <= pos_err_threshold:
-                    # pos_err_reward += (10.0 + np.exp((1e-1 / (self.pos_err+1e-5))))
-                    # pos_err_reward += (10.0 - np.log(0.1*self.pos_err+1e-7))
-                    pos_err_reward += 50.0 * (1 - np.tanh(10.0 * self.pos_err))
-                else:
-                    pos_err_reward += 0.1 * (1-np.tanh(self.pos_err)) - self.pos_err
-        # rot err
-        if self.train_type == "rot":
-            rot_err_threshold = self.rot_err_threshold
-            if self.rot_err > self.init_rot_err:
-                rot_err_reward -= 5.0
-            
-            rot_err_reward += 0.1 * (1-np.tanh(0.5*self.rot_err)) - 0.2 * self.rot_err
-            if self.rot_err <= rot_err_threshold:
-                # rot_err_reward += (10.0 + np.exp(1e-1 / (self.rot_err+1e-5)))
-                # rot_err_reward += (10.0 - np.log(0.1*self.rot_err+1e-7))
-                rot_err_reward += 10.0 * (1-np.tanh(0.5*self.rot_err))
-        # pose err
-        if self.train_type == "pose":
-            if (self.rot_err < rot_err_threshold and self.pos_err < pos_err_threshold):
-                pose_err_reward = 1000.0
+    def random_qpos(self):
+        return np.random.uniform(self.joint_low, self.joint_high)
 
-        # action Penalty
-        action_penalty = -0.01 * np.linalg.norm(action)
-        # joint vel penalty
-        vel_penalty = -0.01 * np.linalg.norm(self.get_joint_vel())
+    def write_tensorboard(self, str, y_value):
+        self.writer.add_scalar(str, y_value, self.steps_ctr)
+
+    @staticmethod
+    def cal_pos_reward(error):
+        pos_err_reward = 0.0
+        pos_err = error["pos"]
+        if pos_err > error["pos_init"]:
+            pos_err_reward -= 5.0
+        elif pos_err > FinalPosErrThreshold:
+            pos_err_reward -= 2.0 * pos_err
+        else:
+            pos_err_reward += 10.0 * (1 - np.tanh(10.0 * pos_err))
+        return pos_err_reward
+
+    @staticmethod
+    def cal_rot_reward(error):
+        rot_err_reward = 0.0
+        rot_err = error["rot"]
+    
+        if rot_err > error["rot_init"]:
+            rot_err_reward -= 5.0
+        elif rot_err > FinalRotErrThreshold:
+            rot_err_reward -= 2.0 * rot_err
+        else:
+            rot_err_reward += 10.0 * (1 - np.tanh(10.0 * rot_err))
+        return rot_err_reward 
+
+    def cal_reward_value(self, action, error):
+        # reward items
+        pos_err_reward, rot_err_reward, pose_err_reward, action_penalty, vel_penalty  = self.cal_reward_value_masac()
+
         # reward
         reward_value = (
             pos_err_reward + rot_err_reward + pose_err_reward + 
@@ -359,8 +379,46 @@ class ReachEnv(ManipulationEnv):
         self.writer.add_scalar("Reward/Penalty_Action", action_penalty, self.steps_ctr)
         self.writer.add_scalar("Reward/Penalty_Velocity", vel_penalty, self.steps_ctr)
         self.writer.add_scalar("Reward/InstaneousReward", reward_value, self.steps_ctr)
-
+        self.writer.add_scalar("Error/Position", self.pos_err, self.steps_ctr)
+        self.writer.add_scalar("Error/Orientation", self.rot_err, self.steps_ctr)
+        self.writer.add_scalar("Error/EpisodeBestPosErr", self.best_pos_err, self.steps_ctr)
+        self.writer.add_scalar("Error/EpisodeBestRotErr", self.best_rot_err, self.steps_ctr)
+        self.writer.add_scalar("Error/BestPosErr", self.cur_best_pos_err, self.steps_ctr)
+        self.writer.add_scalar("Error/BestRotErr", self.cur_best_rot_err, self.steps_ctr)
+        self.writer.add_scalar("Info/PosSuccessRate", self.pos_tracker.success_rate(), self.steps_ctr)
+        self.writer.add_scalar("Info/RotSuccessRate", self.rot_tracker.success_rate(), self.steps_ctr)
         return reward_value
+
+    def cal_reward_value_masac(self):
+        # 奖励和惩罚项
+        pos_err_reward, rot_err_reward, pose_err_reward = 0.0, 0.0, 0.0
+        action_penalty, vel_penalty = 0.0, 0.0
+
+        if self.pos_err > self.init_pos_err:
+            pos_err_reward -= 5.0
+        elif self.pos_err > self.pos_err_threshold:
+            pos_err_reward -= 2.0 * self.pos_err
+        else:
+            pos_err_reward += 10.0 * (1 - np.tanh(10.0 * self.pos_err))
+            self.pos_episode_succ += 1
+            
+        if self.rot_err > self.init_rot_err:
+            rot_err_reward -= 5.0
+        elif self.rot_err > self.rot_err_threshold:
+            rot_err_reward -= 2.0 * self.rot_err
+        else:
+            rot_err_reward += 10.0 * (1 - np.tanh(10.0 * self.rot_err))
+            self.rot_episode_succ += 1
+        
+        if (self.rot_err < self.rot_err_threshold and self.pos_err < self.pos_err_threshold):
+            pose_err_reward = 20.0
+
+        # action Penalty
+        action_penalty = -0.01 * np.linalg.norm(self.action)
+        # joint vel penalty
+        # vel_penalty = -0.01 * np.linalg.norm(self.get_joint_vel())
+        # reward
+        return pos_err_reward, rot_err_reward, pose_err_reward, action_penalty, vel_penalty
 
     def reset(self, seed=None, options=None):
         """
@@ -368,15 +426,36 @@ class ReachEnv(ManipulationEnv):
         """
         # 调用父类reset
         obs_dict = super().reset()
+        # self.robots[0].set_joint_positions(self.random_qpos())
+        self.sim.data.qpos[:] = self.random_qpos()
+        self.sim.forward()
         # 重置参数
         if self.episodes_ctr > 1:
             self.writer.add_scalar("Reward/TotalReward", self.episode_reward, self.steps_ctr)
         self.episodes_ctr = self.episodes_ctr + 1
-        if (self.episodes_ctr % 10 == 0) and (self.final_pos_err_threshold < self.pos_err_threshold):
-            self.pos_err_threshold *= 0.999
+        if (self.best_pos_err is not None) and (self.best_pos_err < self.cur_best_pos_err):
+            self.cur_best_pos_err = self.best_pos_err
+        if (self.best_rot_err is not None) and (self.best_rot_err < self.cur_best_rot_err):
+            self.cur_best_rot_err = self.best_rot_err
+
+        if self.best_pos_err is not None:
+            self.pos_tracker.add_result((self.pos_episode_succ > 3))
+            if self.best_pos_err < self.cur_best_pos_err:
+                self.cur_best_pos_err = self.best_pos_err
+            if (self.pos_tracker.success_rate() > 0.7) and (self.final_pos_err_threshold < self.pos_err_threshold) and (self.episodes_ctr > 50):
+                self.pos_err_threshold *= 0.95
+        if self.best_rot_err is not None:
+            self.rot_tracker.add_result((self.rot_episode_succ>3))
+            if self.best_rot_err < self.cur_best_rot_err:
+                self.cur_best_rot_err = self.best_rot_err
+            if (self.rot_tracker.success_rate() > 0.7) and (self.final_rot_err_threshold < self.rot_err_threshold) and (self.episodes_ctr > 50):
+                self.rot_err_threshold *= 0.95
+        
         self.best_pos_err = None
         self.best_rot_err = None
         self.episode_reward = 0.0
+        self.pos_episode_succ = 0
+        self.rot_episode_succ = 0
         # 更新
         if self.reset_policy == 1:
             self.update_goal_pose()
@@ -384,6 +463,7 @@ class ReachEnv(ManipulationEnv):
                 self.update_camera_pose()
         elif self.reset_policy == 2:
             self.update_camera_pose()
+            self.update_tool_pose()
             if self.episodes_ctr % self.reset_episodes_num == 0:
                 self.update_goal_pose()
 
@@ -394,6 +474,7 @@ class ReachEnv(ManipulationEnv):
         自定义奖励函数
         '''
         self.update_tf()
+        self.steps_ctr = self.steps_ctr + 1
 
         error_info = calculate_pose_error(
             self.get_tool_pose_c(), 
@@ -414,13 +495,8 @@ class ReachEnv(ManipulationEnv):
             reward_value = -5.0
 
         if self.reward_shaping:
-            reward_value = self.cal_reward_value(action=action)
-
-        self.steps_ctr = self.steps_ctr + 1
-        self.writer.add_scalar("Error/Position", self.pos_err, self.steps_ctr)
-        self.writer.add_scalar("Error/Orientation", self.rot_err, self.steps_ctr)
-        self.writer.add_scalar("Error/BestPosErr", self.best_pos_err, self.steps_ctr)
-        self.writer.add_scalar("Error/BestRotErr", self.best_rot_err, self.steps_ctr)
+            self.action=action
+            reward_value = self.cal_reward_value(action=action, error=error_info)            
         
         self.episode_reward += reward_value
         return reward_value
