@@ -1,6 +1,51 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
 from typing import List, Union, Tuple
+import math
+
+def combined_reward_scalar(x, x_ref=0.5, K=2.0, R=10.0, x_c=0.8, eps=1e-12):
+    """
+    Hybrid reward function:
+        - log-shaped for x <= x_c
+        - linear extension for x > x_c
+    """
+    val_at_xc = -K * math.log10((x_c + eps) / x_ref)
+    slope = -K / ((x_c + eps) * math.log(10))
+    
+    if x <= x_c:
+        y = -K * math.log10((x + eps) / x_ref)
+    else:
+        y = val_at_xc + slope * (x - x_c)
+        
+    if y > R:
+        return R
+    if y < -R:
+        return -R
+    return y
+
+def combined_reward_array(x, x_ref=0.5, K=2.0, R=10.0, x_c=0.8, eps=1e-12):
+    """
+    Hybrid reward function:
+        - log-shaped for x <= x_c
+        - linear extension for x > x_c
+    """
+    x = np.array(x)
+    y = np.empty_like(x)
+
+    val_at_xc = -K * np.log10((x_c + eps) / x_ref)
+    slope = -K / ((x_c + eps) * np.log(10))
+    linear = val_at_xc + slope * (x - x_c)
+    mask = (x <= x_c)
+    y[mask] = -K * np.log10((x[mask] + eps) / x_ref)
+    y[~mask] = linear[~mask]
+
+    return np.clip(y, -R, R)
+
+def combined_reward(x, *args, **kwargs):
+    if isinstance(x, (list, tuple, np.ndarray)):
+        return combined_reward_array(np.array(x), *args, **kwargs)
+    else:
+        return combined_reward_scalar(float(x), *args, **kwargs)
 
 def invert_homogeneous_matrix(T):
     """

@@ -387,7 +387,7 @@ def make_reach_her_env(render=False, **kwargs):
 def make_reach_her_env_masac(render=False, **kwargs):
     log_dir=kwargs.get("log_dir")
     train_env_config["train_type"] = 'pose'
-    train_env_config["has_renderer"] = True
+    train_env_config["has_renderer"] = kwargs.get("has_renderer")
     if render:
         env = ReachEnv(**eval_env_config, log_dir=log_dir)
     else:

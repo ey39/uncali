@@ -115,7 +115,7 @@ class ReachEnv(ManipulationEnv):
         self.cur_best_rot_err = 1.0
         self.episode_reward = 0.0
         
-        self.reset_episodes_num = 10
+        self.reset_episodes_num = 5
         self.pos_tracker = SuccessTracker(10)
         self.rot_tracker = SuccessTracker(10)
         self.pos_episode_succ = 0
@@ -243,7 +243,9 @@ class ReachEnv(ManipulationEnv):
         T_target_world = self.T_target_world
         T_base_world = self.get_base_pose_w(verbose=verbose)
         _, pos_b_w = homogeneous_matrix_to_quaternion(T_base_world)
+        i = 0
         while True:
+            i += 1
             self.T_target_world = generate_random_homogeneous_transform(
                 translation_range=[
                     (pos_b_w[0]-0.8, pos_b_w[0]+0.8), 
@@ -275,6 +277,9 @@ class ReachEnv(ManipulationEnv):
             self.init_rot_err = error_info['rotation_error_angle']
             if (self.init_pos_err > self.pos_err_threshold) and (self.init_rot_err > self.rot_err_threshold):
                 break
+            if i>100:
+                print(f"get goal out of range:{self.steps_ctr}")
+                break
         if verbose:
             print(f"原世界坐标系目标变换:\n{T_target_world}")
             print(f"新世界坐标系目标变换:\n{self.T_target_world}")
@@ -286,7 +291,9 @@ class ReachEnv(ManipulationEnv):
         设置新的相机位姿
         """
         T_camera_world = self.T_camera_world
+        i = 0
         while True:
+            i += 1
             self.T_camera_world = generate_perturbed_transform(
                 base_transform=self.get_base_pose_w(),
                 translation_error_range=(0.4, 0.6),
@@ -299,6 +306,9 @@ class ReachEnv(ManipulationEnv):
             self.init_pos_err = error_info['translation_magnitude']
             self.init_rot_err = error_info['rotation_error_angle']
             if (self.init_pos_err > self.pos_err_threshold) and (self.init_rot_err > self.rot_err_threshold):
+                break
+            if i>100:
+                print(f"get camera out of range:{self.steps_ctr}")
                 break
         if verbose:
             print(f"原世界坐标系相机变换:\n{T_camera_world}")
@@ -338,28 +348,29 @@ class ReachEnv(ManipulationEnv):
 
     @staticmethod
     def cal_pos_reward(error):
-        pos_err_reward = 0.0
+        # pos_err_reward = 0.0
         pos_err = error["pos"]
-        if pos_err > error["pos_init"]:
-            pos_err_reward -= 5.0
-        elif pos_err > FinalPosErrThreshold:
-            pos_err_reward -= 2.0 * pos_err
-        else:
-            pos_err_reward += 10.0 * (1 - np.tanh(10.0 * pos_err))
-        return pos_err_reward
+        return combined_reward(pos_err)
+        # if pos_err > error["pos_init"]:
+        #     pos_err_reward -= 5.0
+        # elif pos_err > FinalPosErrThreshold:
+        #     pos_err_reward -= 2.0 * pos_err
+        # else:
+        #     pos_err_reward += 10.0 * (1 - np.tanh(10.0 * pos_err))
+        # return pos_err_reward
 
     @staticmethod
     def cal_rot_reward(error):
-        rot_err_reward = 0.0
+        # rot_err_reward = 0.0
         rot_err = error["rot"]
-    
-        if rot_err > error["rot_init"]:
-            rot_err_reward -= 5.0
-        elif rot_err > FinalRotErrThreshold:
-            rot_err_reward -= 2.0 * rot_err
-        else:
-            rot_err_reward += 10.0 * (1 - np.tanh(10.0 * rot_err))
-        return rot_err_reward 
+        return combined_reward(rot_err)
+        # if rot_err > error["rot_init"]:
+        #     rot_err_reward -= 5.0
+        # elif rot_err > FinalRotErrThreshold:
+        #     rot_err_reward -= 2.0 * rot_err
+        # else:
+        #     rot_err_reward += 10.0 * (1 - np.tanh(10.0 * rot_err))
+        # return rot_err_reward 
 
     def cal_reward_value(self, action, error):
         # reward items
@@ -394,27 +405,30 @@ class ReachEnv(ManipulationEnv):
         pos_err_reward, rot_err_reward, pose_err_reward = 0.0, 0.0, 0.0
         action_penalty, vel_penalty = 0.0, 0.0
 
-        if self.pos_err > self.init_pos_err:
-            pos_err_reward -= 5.0
-        elif self.pos_err > self.pos_err_threshold:
-            pos_err_reward -= 2.0 * self.pos_err
-        else:
-            pos_err_reward += 10.0 * (1 - np.tanh(10.0 * self.pos_err))
-            self.pos_episode_succ += 1
+
+        # if self.pos_err > self.init_pos_err:
+        #     pos_err_reward -= 5.0
+        # elif self.pos_err > self.pos_err_threshold:
+        #     pos_err_reward -= 2.0 * self.pos_err
+        # else:
+        #     pos_err_reward += 10.0 * (1 - np.tanh(10.0 * self.pos_err))
+        #     self.pos_episode_succ += 1
+        pos_err_reward = combined_reward(self.pos_err)
             
-        if self.rot_err > self.init_rot_err:
-            rot_err_reward -= 5.0
-        elif self.rot_err > self.rot_err_threshold:
-            rot_err_reward -= 2.0 * self.rot_err
-        else:
-            rot_err_reward += 10.0 * (1 - np.tanh(10.0 * self.rot_err))
-            self.rot_episode_succ += 1
+        # if self.rot_err > self.init_rot_err:
+        #     rot_err_reward -= 5.0
+        # elif self.rot_err > self.rot_err_threshold:
+        #     rot_err_reward -= 2.0 * self.rot_err
+        # else:
+        #     rot_err_reward += 10.0 * (1 - np.tanh(10.0 * self.rot_err))
+        #     self.rot_episode_succ += 1
+        rot_err_reward = combined_reward(self.rot_err)
         
-        if (self.rot_err < self.rot_err_threshold and self.pos_err < self.pos_err_threshold):
-            pose_err_reward = 20.0
+        # if (self.rot_err < self.rot_err_threshold and self.pos_err < self.pos_err_threshold):
+        #     pose_err_reward = 20.0
 
         # action Penalty
-        action_penalty = -0.01 * np.linalg.norm(self.action)
+        action_penalty = -0.001 * np.linalg.norm(self.action)
         # joint vel penalty
         # vel_penalty = -0.01 * np.linalg.norm(self.get_joint_vel())
         # reward
