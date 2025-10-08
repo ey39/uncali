@@ -63,6 +63,69 @@ def invert_homogeneous_matrix(T):
 
     return T_inv
 
+def generate_random_homogeneous_transform_shell(
+    translation_radius=(0.05, 0.1),  # (R_min, R_max) 球壳范围
+    rotation_mode='axis_angle',
+    rotation_range=(0, 10),  # 单位：度
+    seed=None
+):
+    """
+    生成一个随机的4x4齐次变换矩阵（在球壳内随机采样）
+
+    Parameters
+    ----------
+    translation_radius : tuple
+        (R_min, R_max)，采样范围 (m)，保证 R_min <= ||t|| <= R_max
+    rotation_mode : str
+        姿态扰动方式:
+        - 'random': 完全随机旋转 (SO(3))
+        - 'axis_angle': 在给定角度范围内随机旋转
+        - 'euler': 欧拉角扰动
+    rotation_range : tuple, optional
+        旋转范围（度），依赖 rotation_mode
+    seed : int, optional
+        随机种子
+
+    Returns
+    -------
+    numpy.ndarray
+        4x4齐次变换矩阵
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    # --- 平移：球壳内随机采样 ---
+    r_min, r_max = translation_radius
+    direction = np.random.randn(3)
+    direction /= np.linalg.norm(direction)
+    radius = np.random.uniform(r_min, r_max)  # 保证在球壳内
+    translation = direction * radius
+
+    # --- 姿态 ---
+    if rotation_mode == 'random':
+        rotation = Rotation.random().as_matrix()
+
+    elif rotation_mode == 'axis_angle':
+        axis = np.random.randn(3)
+        axis /= np.linalg.norm(axis)
+        angle_deg = np.random.uniform(rotation_range[0], rotation_range[1])
+        angle_rad = np.radians(angle_deg)
+        rotation = Rotation.from_rotvec(axis * angle_rad).as_matrix()
+
+    elif rotation_mode == 'euler':
+        angles = np.random.uniform(rotation_range[0], rotation_range[1], 3)
+        rotation = Rotation.from_euler('xyz', np.radians(angles)).as_matrix()
+
+    else:
+        raise ValueError(f"不支持的旋转模式: {rotation_mode}")
+
+    # --- 齐次矩阵 ---
+    transform_matrix = np.eye(4)
+    transform_matrix[:3, :3] = rotation
+    transform_matrix[:3, 3] = translation
+
+    return transform_matrix
+
 def generate_random_homogeneous_transform(
     translation_range=(-1.0, 1.0),
     rotation_mode='random',

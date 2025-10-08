@@ -301,6 +301,7 @@ train_env_config = {
     "reset_policy": 2,
     "reward_scale": 1.0,
     "use_object_obs": False,
+    "sim2real": False,
 }
 
 eval_env_config = {
@@ -388,6 +389,7 @@ def make_reach_her_env_masac(render=False, **kwargs):
     log_dir=kwargs.get("log_dir")
     train_env_config["train_type"] = 'pose'
     train_env_config["has_renderer"] = kwargs.get("has_renderer")
+    train_env_config["sim2real"] = kwargs.get("sim2real")
     if render:
         env = ReachEnv(**eval_env_config, log_dir=log_dir)
     else:

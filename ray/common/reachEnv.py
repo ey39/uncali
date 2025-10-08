@@ -24,6 +24,10 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 # ===================datatime=====================
 from datetime import datetime
+import threading
+import time
+# ===================ros2=========================
+
 # ===================global variable==============
 FinalPosErrThreshold=0.001                     
 FinalRotErrThreshold=0.001
@@ -47,6 +51,7 @@ class ReachEnv(ManipulationEnv):
                  use_object_obs=False,          # 相机观察障碍物
                  n_env=1,
                  log_dir="db/default",
+                 sim2real=False,
                  **kwargs):
         
         # 使用robosuite创建环境
@@ -93,6 +98,7 @@ class ReachEnv(ManipulationEnv):
             rotation_mode='euler',
             seed=self.seed,   
         )
+        self.T_end_world = self.get_end_pose_w(verbose=False)
         
         # timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    # 构造日志目录
         while shared_memory_exists(f"chatbus_{n_env}"):
@@ -127,6 +133,29 @@ class ReachEnv(ManipulationEnv):
         # 给关节上下限预留 margin，避免到极限
         self.joint_low = self.joint_low + self.margin * (self.joint_high - self.joint_low)
         self.joint_high = self.joint_high - self.margin * (self.joint_high - self.joint_low)
+
+        self.sim2real = sim2real
+        if self.sim2real:
+            import rclpy
+            from rclpy.node import Node
+            from .sim2real_ur5e import RealWorldUR5e
+            import asyncio
+            # 连接真实机械臂
+            rclpy.init()
+            self.real_robot = RealWorldUR5e(verbose=True)
+            self.spin_thread = threading.Thread(target=self.start_ros_spin, args=(self.real_robot,), daemon=True)
+            self.spin_thread.start()
+
+            loop = asyncio.get_event_loop()
+            print("Loop running?", loop.is_running())
+            threading.Thread(target=loop.run_forever, daemon=True).start()
+
+    def start_ros_spin(self, node):
+        from rclpy.executors import MultiThreadedExecutor
+        self.executor = MultiThreadedExecutor()
+        self.executor.add_node(node)
+        self.executor.spin()  # 阻塞在这个线程内
+        self.executor.shutdown()
 
     def _load_model(self):
         self.frame_definitions = {}
@@ -236,6 +265,44 @@ class ReachEnv(ManipulationEnv):
             print(f"相机坐标系目标变换:{T_target_camera}")
         return T_target_camera
     
+    def update_goal_pose_new(self, verbose=False):
+        T_target_world = self.T_target_world
+        T_base_world = self.get_base_pose_w(verbose=verbose)
+        _, pos_b_w = homogeneous_matrix_to_quaternion(T_base_world)
+        i = 0
+        while True:
+            i+=1
+            self.T_target_world = self.T_end_world @ generate_random_homogeneous_transform_shell(
+                translation_radius=(0.1, 0.2),
+                rotation_mode='axis_angle',
+                rotation_range=(0, 30),
+            )
+            _, pos_g_w = homogeneous_matrix_to_quaternion(self.T_target_world)
+            if is_point_in_cylinder(
+                base_center=pos_b_w, 
+                axis_vector=np.array([0, 0, 1]),
+                radius=0.2, 
+                height=1.0, 
+                point=pos_g_w,
+            ):
+                continue
+            T_target_camera = self.get_goal_pose_c(verbose=verbose)
+            T_tool_camera = self.get_tool_pose_c(verbose=verbose)
+            error_info = calculate_pose_error(T_target_camera, T_tool_camera, angle_unit='radians')
+            self.init_pos_err = error_info['translation_magnitude']
+            self.init_rot_err = error_info['rotation_error_angle']
+            if (self.init_pos_err > self.pos_err_threshold) and (self.init_rot_err > self.rot_err_threshold):
+                break
+            if i>100:
+                print(f"get goal out of range:{self.steps_ctr}")
+                break
+        if verbose:
+            print(f"原世界坐标系目标变换:\n{T_target_world}")
+            print(f"新世界坐标系目标变换:\n{self.T_target_world}")
+            print(f"变换位置初始误差:{self.init_pos_err}")
+            print(f"变换角度初始误差:{self.init_rot_err}")
+
+
     def update_goal_pose(self, verbose=False):
         """
         设置新的目标位姿
@@ -339,7 +406,11 @@ class ReachEnv(ManipulationEnv):
             'T_camera_world': self.T_camera_world,
             'T_goal_camera': T_gc,
         })
+        self.real_robot.send_joint_pos(self.get_joint_pos())
 
+    def current_qpos(self):
+        return self.get_joint_pos()
+    
     def random_qpos(self):
         return np.random.uniform(self.joint_low, self.joint_high)
 
@@ -414,6 +485,8 @@ class ReachEnv(ManipulationEnv):
         #     pos_err_reward += 10.0 * (1 - np.tanh(10.0 * self.pos_err))
         #     self.pos_episode_succ += 1
         pos_err_reward = combined_reward(self.pos_err)
+        if self.pos_err < self.pos_err_threshold:
+            self.pos_episode_succ += 1
             
         # if self.rot_err > self.init_rot_err:
         #     rot_err_reward -= 5.0
@@ -423,6 +496,8 @@ class ReachEnv(ManipulationEnv):
         #     rot_err_reward += 10.0 * (1 - np.tanh(10.0 * self.rot_err))
         #     self.rot_episode_succ += 1
         rot_err_reward = combined_reward(self.rot_err)
+        if self.rot_err < self.rot_err_threshold:
+            self.rot_episode_succ += 1
         
         # if (self.rot_err < self.rot_err_threshold and self.pos_err < self.pos_err_threshold):
         #     pose_err_reward = 20.0
@@ -439,9 +514,14 @@ class ReachEnv(ManipulationEnv):
         自定义reset方法
         """
         # 调用父类reset
+        cur_qpos = self.current_qpos()
         obs_dict = super().reset()
         # self.robots[0].set_joint_positions(self.random_qpos())
-        self.sim.data.qpos[:] = self.random_qpos()
+        self.sim.data.qpos[:] = cur_qpos
+        # if self.sim2real:
+        #     self.sim.data.qpos[:] = self.current_qpos()
+        # else:
+        #     self.sim.data.qpos[:] = self.random_qpos()
         self.sim.forward()
         # 重置参数
         if self.episodes_ctr > 1:
@@ -472,14 +552,14 @@ class ReachEnv(ManipulationEnv):
         self.rot_episode_succ = 0
         # 更新
         if self.reset_policy == 1:
-            self.update_goal_pose()
+            self.update_goal_pose_new()
             if self.episodes_ctr % self.reset_episodes_num == 0:
                 self.update_camera_pose()
         elif self.reset_policy == 2:
             self.update_camera_pose()
             self.update_tool_pose()
             if self.episodes_ctr % self.reset_episodes_num == 0:
-                self.update_goal_pose()
+                self.update_goal_pose_new()
 
         return obs_dict 
 
