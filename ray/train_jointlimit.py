@@ -245,10 +245,11 @@ tuner = tune.Tuner(
         storage_path=LOGDIR,
         log_to_file=True,
         checkpoint_config=air.CheckpointConfig(
-            checkpoint_frequency=10,
+            checkpoint_frequency=100,
             checkpoint_at_end=True,
         ),
-        stop={"evaluation/env_runners/episode_return_mean": 1800000.0},
+        stop={"env_runners/num_env_steps_sampled_lifetime": 10_000_000},
+        # stop={"evaluation/env_runners/episode_return_mean": 1800000.0},
         # callbacks=[MyCheckpointCallback()],  # 挂上去
     )
 )

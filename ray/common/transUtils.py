@@ -573,6 +573,36 @@ def homogeneous_matrix_to_pose(transform_matrix, quaternion_format='xyzw'):
     quaternion, translation = homogeneous_matrix_to_quaternion(transform_matrix, quaternion_format)
     return translation, quaternion
 
+def joint_limit_penalty(q, angle_limits, margin=5.0, penalty_scale=1.0):
+    """
+    计算关节角超限惩罚。
+
+    Args:
+        q (np.ndarray): 当前关节角 (长度 = n_joints)
+        angle_limits (list[tuple[float,float]]): 每个关节的角度范围，如 [(-360,360), ...]
+        margin (float): 安全边界区间，单位为度。进入该区间就开始产生惩罚。
+        penalty_scale (float): 惩罚系数，控制惩罚强度。
+
+    Returns:
+        float: 总惩罚值（负数，越大表示越严重）
+        np.ndarray: 每个关节的惩罚分量
+    """
+    q = np.asarray(q)
+    limits = np.array(angle_limits)
+    q_min = limits[:, 0]
+    q_max = limits[:, 1]
+
+    # 在安全区内（离限位 margin 之外）无惩罚
+    lower_violation = np.maximum((q_min + margin) - q, 0.0)
+    upper_violation = np.maximum(q - (q_max - margin), 0.0)
+
+    # 计算进入 margin 区域的比例 (线性或平方式惩罚都可)
+    violation_amount = lower_violation + upper_violation
+    penalty_per_joint = -penalty_scale * (violation_amount ** 2)
+
+    total_penalty = np.sum(penalty_per_joint)
+
+    return total_penalty, penalty_per_joint
 
 def normalize_quaternion(quaternion):
     """

@@ -109,6 +109,10 @@ class ReachEnvHERWrapper(gym.Wrapper):
             return np.concatenate([pos_g_c, pos_t_c])
         elif obs_type == "rot":
             return np.concatenate([rvec_g_c, rvec_t_c])
+        elif obs_type == "joint_pos":
+            return np.concatenate([pos_g_c, pos_t_c, self.unwrapped.get_joint_pos()])
+        elif obs_type == "joint_rot":
+            return np.concatenate([rvec_g_c, rvec_t_c, self.unwrapped.get_joint_pos()])
         else:
             return np.concatenate([pos_g_c, rvec_g_c, pos_t_c, rvec_t_c])
 

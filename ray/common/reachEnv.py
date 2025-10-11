@@ -105,9 +105,9 @@ class ReachEnv(ManipulationEnv):
             n_env += 1
         self.log_dir = f"{log_dir}/user/env_{n_env}"
         self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.pos_err_threshold=0.1                     
+        self.pos_err_threshold=0.005                     
         self.final_pos_err_threshold = FinalPosErrThreshold
-        self.rot_err_threshold=0.1
+        self.rot_err_threshold=0.01
         self.final_rot_err_threshold = FinalRotErrThreshold
         self.channel = SharedMemoryChannel(f"chatbus_{n_env}")   #
         self.episodes_ctr = 0       # 计数器
@@ -130,6 +130,14 @@ class ReachEnv(ManipulationEnv):
         self.joint_low = np.array([-0.470 - 1.0, -1.735, 2.480, -0.785, 1.590, -0.5])
         self.joint_high = np.array([-0.470 + 1.0, -1.735, 2.480, -0.785, 1.590, 0.5])
         self.margin = 0.1
+        self.angle_limits = [
+            (-360, 360),
+            (-360, 360),
+            (-360, 360),
+            (-360, 360),
+            (-360, 360),
+            (-360, 360),
+        ] 
         # 给关节上下限预留 margin，避免到极限
         self.joint_low = self.joint_low + self.margin * (self.joint_high - self.joint_low)
         self.joint_high = self.joint_high - self.margin * (self.joint_high - self.joint_low)
@@ -361,9 +369,16 @@ class ReachEnv(ManipulationEnv):
         i = 0
         while True:
             i += 1
+            choices = np.array([
+                [(0.4, 0.6), (0.4, 0.6), (0.4, 0.6)],
+                [(-0.4, -0.6), (0.4, 0.6), (0.4, 0.6)],
+                [(0.4, 0.6), (-0.4, -0.6), (0.4, 0.6)],
+                [(-0.4, -0.6), (-0.4, -0.6), (0.4, 0.6)],
+            ])
+            idx = np.random.randint(0, len(choices))            
             self.T_camera_world = generate_perturbed_transform(
                 base_transform=self.get_base_pose_w(),
-                translation_error_range=(0.4, 0.6),
+                translation_error_range=choices[idx],#(0.4, 0.6),
                 rotation_error_range=(-45, 45),
                 rotation_mode='euler',
             )
@@ -406,7 +421,8 @@ class ReachEnv(ManipulationEnv):
             'T_camera_world': self.T_camera_world,
             'T_goal_camera': T_gc,
         })
-        self.real_robot.send_joint_pos(self.get_joint_pos())
+        if self.sim2real:
+            self.real_robot.send_joint_pos(self.get_joint_pos())
 
     def current_qpos(self):
         return self.get_joint_pos()
@@ -503,7 +519,10 @@ class ReachEnv(ManipulationEnv):
         #     pose_err_reward = 20.0
 
         # action Penalty
-        action_penalty = -0.001 * np.linalg.norm(self.action)
+        action_penalty, _ = joint_limit_penalty(self.get_joint_pos(), self.angle_limits) # -0.001 * np.linalg.norm(self.action)
+        if action_penalty != 0.0:
+            print(f"joint limit warning, current joint pos:{self.get_joint_pos()}")
+            # 准备归位
         # joint vel penalty
         # vel_penalty = -0.01 * np.linalg.norm(self.get_joint_vel())
         # reward
@@ -536,14 +555,14 @@ class ReachEnv(ManipulationEnv):
             self.pos_tracker.add_result((self.pos_episode_succ > 3))
             if self.best_pos_err < self.cur_best_pos_err:
                 self.cur_best_pos_err = self.best_pos_err
-            if (self.pos_tracker.success_rate() > 0.7) and (self.final_pos_err_threshold < self.pos_err_threshold) and (self.episodes_ctr > 50):
-                self.pos_err_threshold *= 0.95
+            # if (self.pos_tracker.success_rate() > 0.7) and (self.final_pos_err_threshold < self.pos_err_threshold) and (self.episodes_ctr > 50):
+            #     self.pos_err_threshold *= 0.95
         if self.best_rot_err is not None:
             self.rot_tracker.add_result((self.rot_episode_succ>3))
             if self.best_rot_err < self.cur_best_rot_err:
                 self.cur_best_rot_err = self.best_rot_err
-            if (self.rot_tracker.success_rate() > 0.7) and (self.final_rot_err_threshold < self.rot_err_threshold) and (self.episodes_ctr > 50):
-                self.rot_err_threshold *= 0.95
+            # if (self.rot_tracker.success_rate() > 0.7) and (self.final_rot_err_threshold < self.rot_err_threshold) and (self.episodes_ctr > 50):
+            #     self.rot_err_threshold *= 0.95
         
         self.best_pos_err = None
         self.best_rot_err = None
