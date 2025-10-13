@@ -105,9 +105,9 @@ class ReachEnv(ManipulationEnv):
             n_env += 1
         self.log_dir = f"{log_dir}/user/env_{n_env}"
         self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.pos_err_threshold=0.005                     
+        self.pos_err_threshold=0.01                     
         self.final_pos_err_threshold = FinalPosErrThreshold
-        self.rot_err_threshold=0.01
+        self.rot_err_threshold=0.03
         self.final_rot_err_threshold = FinalRotErrThreshold
         self.channel = SharedMemoryChannel(f"chatbus_{n_env}")   #
         self.episodes_ctr = 0       # 计数器
@@ -124,6 +124,7 @@ class ReachEnv(ManipulationEnv):
         self.reset_episodes_num = 5
         self.pos_tracker = SuccessTracker(10)
         self.rot_tracker = SuccessTracker(10)
+        self.total_tracker = SuccessTracker(20)
         self.pos_episode_succ = 0
         self.rot_episode_succ = 0
 
@@ -552,17 +553,19 @@ class ReachEnv(ManipulationEnv):
             self.cur_best_rot_err = self.best_rot_err
 
         if self.best_pos_err is not None:
-            self.pos_tracker.add_result((self.pos_episode_succ > 3))
+            self.pos_tracker.add_result((self.pos_episode_succ > 0))
             if self.best_pos_err < self.cur_best_pos_err:
                 self.cur_best_pos_err = self.best_pos_err
             # if (self.pos_tracker.success_rate() > 0.7) and (self.final_pos_err_threshold < self.pos_err_threshold) and (self.episodes_ctr > 50):
             #     self.pos_err_threshold *= 0.95
         if self.best_rot_err is not None:
-            self.rot_tracker.add_result((self.rot_episode_succ>3))
+            self.rot_tracker.add_result((self.rot_episode_succ > 0))
             if self.best_rot_err < self.cur_best_rot_err:
                 self.cur_best_rot_err = self.best_rot_err
             # if (self.rot_tracker.success_rate() > 0.7) and (self.final_rot_err_threshold < self.rot_err_threshold) and (self.episodes_ctr > 50):
             #     self.rot_err_threshold *= 0.95
+
+            self.total_tracker.add_result(((self.pos_episode_succ > 0) and (self.pos_episode_succ > 0)))
         
         self.best_pos_err = None
         self.best_rot_err = None
