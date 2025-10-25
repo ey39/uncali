@@ -26,6 +26,9 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import threading
 import time
+import logging
+import os
+import json
 # ===================ros2=========================
 
 # ===================global variable==============
@@ -105,6 +108,7 @@ class ReachEnv(ManipulationEnv):
             n_env += 1
         self.log_dir = f"{log_dir}/user/env_{n_env}"
         self.writer = SummaryWriter(log_dir=self.log_dir)
+        setup_logger(self.log_dir)
         self.pos_err_threshold=0.01                     
         self.final_pos_err_threshold = FinalPosErrThreshold
         self.rot_err_threshold=0.03
@@ -144,7 +148,15 @@ class ReachEnv(ManipulationEnv):
         self.joint_high = self.joint_high - self.margin * (self.joint_high - self.joint_low)
 
         self.sim2real = sim2real
+        self.counter = 0
+        self.start_pose = self.get_end_pose_w()
+        self.exp_id = get_next_experiment_id(self.log_dir)
+        self.trajectory = []
+        self.goal_or_start = False
+        self.real_ex = True
         if self.sim2real:
+            # self.T_tool_end = load_pose_yaml("/home/ey/rl/src/rlreach2/rlreach/ray/common/tool_end.yaml")
+            self.T_tool_end = load_pose_yaml("/home/ey/rl/src/rlreach2/rlreach/ray/common/end.yaml")
             import rclpy
             from rclpy.node import Node
             from .sim2real_ur5e import RealWorldUR5e
@@ -173,7 +185,7 @@ class ReachEnv(ManipulationEnv):
         # Adjust base pose accordingly
         self.table_full_size=(0.8, 0.8, 0.05)
         self.table_friction=(1.0, 5e-3, 1e-4)
-        self.table_offset = np.array((0, 0, 0.8))
+        self.table_offset = np.array((0, 0, 0.5))
         xpos = self.robots[0].robot_model.base_xpos_offset["table"](self.table_full_size[0])
         self.robots[0].robot_model.set_base_xpos(xpos)
 
@@ -273,6 +285,15 @@ class ReachEnv(ManipulationEnv):
         if verbose:
             print(f"相机坐标系目标变换:{T_target_camera}")
         return T_target_camera
+
+
+    def update_goal_pose_real(self, verbose=False):
+        path = "/home/ey/rl/src/rlreach2/rlreach/ray/test"
+        if self.goal_or_start:
+            self.T_target_world = self.get_base_pose_w() @ np.loadtxt(os.path.join(path, "start_pose.txt"))
+        else:
+            self.T_target_world = self.get_base_pose_w() @ np.loadtxt(os.path.join(path, "goal_pose.txt"))
+        self.goal_or_start = not self.goal_or_start
     
     def update_goal_pose_new(self, verbose=False):
         T_target_world = self.T_target_world
@@ -281,11 +302,19 @@ class ReachEnv(ManipulationEnv):
         i = 0
         while True:
             i+=1
-            self.T_target_world = self.T_end_world @ generate_random_homogeneous_transform_shell(
-                translation_radius=(0.1, 0.2),
-                rotation_mode='axis_angle',
-                rotation_range=(0, 30),
-            )
+            if self.sim2real:
+                self.T_target_world = self.T_end_world @ generate_random_homogeneous_transform_shell(
+                    translation_radius=(0.1, 0.2),
+                    rotation_mode='axis_angle',
+                    rotation_range=(60, 90),
+                )
+            else:
+                self.T_target_world = self.T_end_world @ generate_random_homogeneous_transform_shell(
+                    translation_radius=(0.1, 0.4),
+                    rotation_mode='axis_angle',
+                    rotation_range=(0, 90),
+                )
+
             _, pos_g_w = homogeneous_matrix_to_quaternion(self.T_target_world)
             if is_point_in_cylinder(
                 base_center=pos_b_w, 
@@ -410,20 +439,30 @@ class ReachEnv(ManipulationEnv):
         """
         将当前坐标树传给ros2包
         """
-        self.get_joint_pos(verbose=False)
-        self.get_joint_vel(verbose=False)
+        # self.get_joint_pos(verbose=False)
+        # self.get_joint_vel(verbose=False)
         T_bw = self.get_base_pose_w(verbose=False)
         T_gc = self.get_goal_pose_c(verbose=False)
         T_eb = self.get_end_pose_b(verbose=False)
-        self.channel.send({
-            'T_base_world': T_bw,
-            'T_end_base': T_eb,
-            'T_tool_end': self.T_tool_end,
-            'T_camera_world': self.T_camera_world,
-            'T_goal_camera': T_gc,
-        })
+        
         if self.sim2real:
             self.real_robot.send_joint_pos(self.get_joint_pos())
+            self.channel.send({
+                # 'T_base_world': T_bw,
+                'T_end_world': T_eb,
+                'T_tool_end': self.T_tool_end,
+                'T_camera_world': compose_transforms(invert_homogeneous_matrix(T_bw), self.T_camera_world),
+                # 'T_camera_world': self.T_camera_world,
+                'T_goal_camera': T_gc,
+            })
+        else:
+            self.channel.send({
+                'T_base_world': T_bw,
+                'T_end_base': T_eb,
+                'T_tool_end': self.T_tool_end,
+                'T_camera_world': self.T_camera_world,
+                'T_goal_camera': T_gc,
+            })
 
     def current_qpos(self):
         return self.get_joint_pos()
@@ -486,6 +525,19 @@ class ReachEnv(ManipulationEnv):
         self.writer.add_scalar("Error/BestRotErr", self.cur_best_rot_err, self.steps_ctr)
         self.writer.add_scalar("Info/PosSuccessRate", self.pos_tracker.success_rate(), self.steps_ctr)
         self.writer.add_scalar("Info/RotSuccessRate", self.rot_tracker.success_rate(), self.steps_ctr)
+        self.writer.add_scalar("Info/SuccessRate", self.total_tracker.success_rate(), self.steps_ctr)
+
+
+        if self.sim2real:
+            self.trajectory.append({
+                "goal": self.get_goal_pose_c(),
+                "action": action,
+                "pose": self.get_tool_pose_c(),
+                "robot_pose": self.get_end_pose_w(),
+                "error": np.array([self.pos_err, self.rot_err]),
+                "reward": np.array([pos_err_reward, rot_err_reward, reward_value]),
+            })
+
         return reward_value
 
     def cal_reward_value_masac(self):
@@ -567,21 +619,68 @@ class ReachEnv(ManipulationEnv):
 
             self.total_tracker.add_result(((self.pos_episode_succ > 0) and (self.pos_episode_succ > 0)))
         
-        self.best_pos_err = None
-        self.best_rot_err = None
-        self.episode_reward = 0.0
-        self.pos_episode_succ = 0
-        self.rot_episode_succ = 0
         # 更新
         if self.reset_policy == 1:
             self.update_goal_pose_new()
             if self.episodes_ctr % self.reset_episodes_num == 0:
                 self.update_camera_pose()
         elif self.reset_policy == 2:
-            self.update_camera_pose()
-            self.update_tool_pose()
-            if self.episodes_ctr % self.reset_episodes_num == 0:
-                self.update_goal_pose_new()
+            
+            if not self.sim2real:
+                self.update_tool_pose()
+                if self.episodes_ctr % self.reset_episodes_num == 0:
+                    self.update_goal_pose_new()
+                self.update_camera_pose()
+            else:
+                self.counter += 1
+                print(f"最小位置误差:\n{self.best_pos_err}")
+                print(f"最小姿态误差:\n{self.best_rot_err}")
+                logging.info(f"最小位置误差:\n{self.best_pos_err}")
+                logging.info(f"最小姿态误差:\n{self.best_rot_err}")
+                if self.real_ex:
+                    data_file = save_experiment_data(self.log_dir, self.exp_id, self.start_pose, self.T_tool_end, self.T_target_world, self.trajectory)
+                    print(f"==== 第 {self.exp_id} 次实验 ====")
+                    logging.info(f"==== 第 {self.exp_id} 次实验 ====")
+                    logging.info(f"文件名: {os.path.basename(data_file)}")
+                    logging.info(f"起始位姿:\n{self.start_pose}")
+                    logging.info(f"工具末端:\n{self.T_tool_end}")
+                    logging.info(f"目标位姿:\n{self.T_target_world}")
+                    logging.info("================================\n")
+                    # print(f"实验 #{self.exp_id} 完成，数据文件：{data_file}")
+
+                    self.update_goal_pose_real()
+                    self.start_pose = self.get_end_pose_w()
+                    self.exp_id = get_next_experiment_id(self.log_dir)
+                    
+                    self.trajectory = []
+                    if self.counter % 10 == 0:
+                        self.update_camera_pose()
+                else:
+                    if self.episodes_ctr % 20 == 0:
+                        data_file = save_experiment_data(self.log_dir, self.exp_id, self.start_pose, self.T_tool_end, self.T_target_world, self.trajectory)
+                        print(f"==== 第 {self.exp_id} 次实验 ====")
+                        logging.info(f"==== 第 {self.exp_id} 次实验 ====")
+                        logging.info(f"文件名: {os.path.basename(data_file)}")
+                        logging.info(f"起始位姿:\n{self.start_pose}")
+                        logging.info(f"工具末端:\n{self.T_tool_end}")
+                        logging.info(f"目标位姿:\n{self.T_target_world}")
+                        logging.info("================================\n")
+                        # print(f"实验 #{self.exp_id} 完成，数据文件：{data_file}")
+
+                        self.update_goal_pose_new()
+                        self.start_pose = self.get_end_pose_w()
+                        self.exp_id = get_next_experiment_id(self.log_dir)
+                        self.counter = 0
+                        self.trajectory = []
+                    if self.counter < 10:
+                        self.update_camera_pose()
+            
+            
+        self.best_pos_err = None
+        self.best_rot_err = None
+        self.episode_reward = 0.0
+        self.pos_episode_succ = 0
+        self.rot_episode_succ = 0
 
         return obs_dict 
 
@@ -615,6 +714,7 @@ class ReachEnv(ManipulationEnv):
             reward_value = self.cal_reward_value(action=action, error=error_info)            
         
         self.episode_reward += reward_value
+
         return reward_value
 
     def _check_success(self):

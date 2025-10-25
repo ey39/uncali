@@ -169,9 +169,9 @@ config = (
         min_sample_timesteps_per_iteration=1000,
     )
     .evaluation(
-        evaluation_interval=1,
+        evaluation_interval=10,
         evaluation_num_env_runners=1,
-        evaluation_duration=2,
+        evaluation_duration=1,
         evaluation_config={"seed": 42},
     )
     .env_runners(
@@ -191,6 +191,7 @@ def _on_sample_end(env_runner, metrics_logger, samples, **kwargs):
         _on_sample_end.count = 0  # 初始化静态变量
     agent_1_episode = samples[0].agent_episodes["agent_1"]
     agent_2_episode = samples[0].agent_episodes["agent_2"]
+    mode = 1 # 0-final 1-future
     # print(f"samples len:{len(samples)}")
     if len(agent_1_episode) == 200:
         if (random.random() < 0.5):
@@ -206,16 +207,19 @@ def _on_sample_end(env_runner, metrics_logger, samples, **kwargs):
                 ),
             }
         # pos
-            for i in range(len(agent_1_episode.observations)):
-                agent_1_episode.observations[i][:3] = agent_1_episode.observations[-1][-3:]
+            index = -1
+            for i in range(len(agent_1_episode.observations)): 
+                if mode == 1:
+                    x = np.random.randint(low=1, high=10)
+                    index = min(i+x, len(agent_1_episode.observations)-1)
+                agent_1_episode.observations[i][:3] = agent_1_episode.observations[index][-3:]
                 err["pos"] = calculate_pos_error(
                     np.array(agent_1_episode.observations[i][:3]), 
                     np.array(agent_1_episode.observations[i][-3:])
                 )
                 agent_1_episode.rewards[i-1] = ReachEnv.cal_pos_reward(error=err)
         # rot
-            # for i in range(len(agent_2_episode.observations))[1:]:
-                agent_2_episode.observations[i][:3] = agent_2_episode.observations[-1][-3:]
+                agent_2_episode.observations[i][:3] = agent_2_episode.observations[index][-3:]
                 err["rot"] = calculate_rot_error(
                     np.array(agent_2_episode.observations[i][:3]), 
                     np.array(agent_2_episode.observations[i][-3:]),
@@ -235,7 +239,7 @@ def _on_sample_end(env_runner, metrics_logger, samples, **kwargs):
     #     print(f"ep1 act:{ep1.actions[i]}")
 
     
-config.callbacks(on_sample_end=_on_sample_end)
+# config.callbacks(on_sample_end=_on_sample_end)
 
 tuner = tune.Tuner(
     trainable=config.algo_class,
@@ -248,7 +252,7 @@ tuner = tune.Tuner(
             checkpoint_frequency=100,
             checkpoint_at_end=True,
         ),
-        stop={"env_runners/num_env_steps_sampled_lifetime": 10_000_000},
+        stop={"env_runners/num_env_steps_sampled_lifetime": 5_000_000},
         # stop={"evaluation/env_runners/episode_return_mean": 1800000.0},
         # callbacks=[MyCheckpointCallback()],  # 挂上去
     )

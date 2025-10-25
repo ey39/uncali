@@ -169,7 +169,7 @@ def main():
         .framework("torch")
         .reporting(
             metrics_num_episodes_for_smoothing=5,
-            min_sample_timesteps_per_iteration=1000,
+            min_sample_timesteps_per_iteration=100_000,
         )
         # .evaluation(
         #     evaluation_interval=1,
@@ -186,8 +186,7 @@ def main():
         #     # gym_env_vectorize_mode="ASYNC"
         # )
     )
-    # checkpoint_dir = "/home/ey/rl/src/rlreach2/rlreach/ray/db/ray_results/MultiAgentReach_2025-09-25_17-43-16/multi_agent_reach/SAC_MultiReach-v0_11058_00000_0_2025-09-25_17-43-18/checkpoint_000396"
-    checkpoint_dir = "/home/ey/rl/src/rlreach2/rlreach/ray/db/ray_results/MultiAgentReach_2025-09-27_22-22-45/multi_agent_reach/SAC_MultiReach-v0_70802_00000_0_2025-09-27_22-22-46/checkpoint_000830"
+    checkpoint_dir = "/home/ey/rl/src/rlreach2/rlreach/ray/db/ray_results/MultiAgentReach_2025-10-18_14-59-19/multi_agent_reach/SAC_MultiReach-v0_f9829_00000_0_2025-10-18_14-59-22/checkpoint_000158"
     config.callbacks(
         on_algorithm_init=(
             lambda algorithm, _dir=checkpoint_dir, **kw: algorithm.restore_from_path(_dir)
@@ -201,7 +200,7 @@ def main():
             name="multi_agent_reach",
             storage_path=LOGDIR,
             log_to_file=True,
-            # stop={"num_env_steps_sampled_lifetime": 80000},
+            stop={"num_env_steps_sampled_lifetime": 8_400_000},
             # callbacks=[MyCheckpointCallback()],  # 挂上去
         )
     )

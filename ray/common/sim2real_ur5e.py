@@ -6,6 +6,7 @@ from std_msgs.msg import Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.msg import JointTrajectoryControllerState
 from builtin_interfaces.msg import Duration
+from common.one_euro_filter import OneEuroFilter
 import numpy as np
 import asyncio
 import math
@@ -59,6 +60,13 @@ class RealWorldUR5e(Node):
         # Not really sure if current_pos and target_pos require mutex here.
         self.current_pos = None
         self.target_pos = None
+
+        self.freq = 60.0
+        beta = 0.01
+        min_cutoff = 1.0
+        d_cutoff = 1.0
+        self.filters = [OneEuroFilter(x0=0, t0=0, dx0=0, beta=beta, min_cutoff=min_cutoff, d_cutoff=d_cutoff) for _ in range(6)]
+        self.time = 0
         
         if self.verbose:
             print("Receiving real-world UR10 joint angles...")
@@ -90,10 +98,13 @@ class RealWorldUR5e(Node):
     
     def sub_callback(self, msg):
         # msg has type: JointTrajectoryControllerState
+        self.time += 1 / self.freq
         actual_pos = {}
         for i in range(len(msg.joint_names)):
             joint_name = msg.joint_names[i]
             joint_pos = msg.actual.positions[i]
+            # filter
+            # joint_pos = self.filters[i](self.time, joint_pos)
             actual_pos[joint_name] = joint_pos
         self.current_pos = actual_pos
         # if self.verbose:
@@ -102,7 +113,7 @@ class RealWorldUR5e(Node):
     async def pub_task(self):
         while rclpy.ok():
             await asyncio.sleep(1.0 / self.pub_freq)
-            print("pub_task running...")
+            # print("pub_task running...")
             if self.current_pos is None:
                 # Not ready (recieved UR state) yet
                 continue

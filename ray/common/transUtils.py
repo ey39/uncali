@@ -652,6 +652,112 @@ def is_point_in_cylinder(base_center, axis_vector, radius, height, point):
     radial_distance = np.linalg.norm(point - projection_point)
     return radial_distance <= radius
 
+import os
+import json
+import numpy as np
+from datetime import datetime
+import logging
+
+def setup_logger(dir, filename="experiment.log"):
+    LOG_FILE = os.path.join(dir, filename)
+    os.makedirs(dir, exist_ok=True)
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+
+def get_next_experiment_id(dir):
+    """自动计算当前是第几次实验"""
+    existing = [f for f in os.listdir(dir) if f.startswith("experiment_")]
+    ids = []
+    for f in existing:
+        try:
+            ids.append(int(f.split("_")[1]))
+        except Exception:
+            pass
+    next_id = max(ids, default=0) + 1
+    return next_id
+
+# ===============================
+# 数据保存 / 读取
+# ===============================
+def save_experiment_data(dir, exp_id, start_pose, tool_end, goal_pose, trajectories):
+    """
+    参数：
+        exp_id: int
+        start_pose, tool_end, goal_pose: np.ndarray
+        trajectories: list[dict]
+            每条轨迹形如：
+            {"goal":np.array ,"action": np.array, "pose": np.array, "error": np.array, "reward": np.array}
+    """
+    filename = f"experiment_{exp_id:03d}_data.npz"
+    path = os.path.join(dir, filename)
+    
+    # 把轨迹打包成 numpy-friendly 格式
+    goals = np.array([t["goal"] for t in trajectories])
+    actions = np.array([t["action"] for t in trajectories])
+    poses   = np.array([t["pose"] for t in trajectories])
+    robot_poses   = np.array([t["robot_pose"] for t in trajectories])
+    errors  = np.array([t["error"] for t in trajectories])
+    rewards = np.array([t["reward"] for t in trajectories])
+    
+    np.savez_compressed(
+        path,
+        start_pose=start_pose,
+        tool_end=tool_end,
+        goal_pose=goal_pose,
+        goals=goals,
+        actions=actions,
+        poses=poses,
+        robot_poses=robot_poses,
+        errors=errors,
+        rewards=rewards,
+    )
+    
+    logging.info(f"实验 #{exp_id} 数据已保存到 {filename}")
+    return path
+
+def load_experiment_data(dir, filename):
+    path = os.path.join(dir, filename)
+    data = np.load(path)
+    return {
+        "start_pose": data["start_pose"],
+        "tool_end": data["tool_end"],
+        "goal_pose": data["goal_pose"],
+        "goals": data["goals"],
+        "actions": data["actions"],
+        "poses": data["poses"],
+        "robot_poses": data["robot_poses"],
+        "errors": data["errors"],
+        "rewards": data["rewards"],
+    }
+
+import yaml
+def load_pose_yaml(yaml_file):
+    """
+    从 YAML 文件读取 rotation + translation 并拼成 4x4 齐次变换矩阵
+    """
+    with open(yaml_file, 'r') as f:
+        data = yaml.safe_load(f)
+
+    # 提取旋转和平移
+    R_list = data.get("rotation", None)
+    t_list = data.get("translation", None)
+
+    if R_list is None or t_list is None:
+        raise ValueError("YAML 文件中必须包含 'rotation' 和 'translation' 两个字段")
+
+    R = np.array(R_list, dtype=float).reshape(3, 3)
+    t = np.array(t_list, dtype=float).reshape(3, 1) / 1000.0
+
+    # 拼成齐次变换矩阵
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3:] = t
+
+    return T
+
 from collections import deque
 
 class SuccessTracker:
