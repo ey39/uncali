@@ -94,8 +94,8 @@ class ReachEnvHERWrapper(gym.Wrapper):
         
         return np.concatenate([pos_g_c, pos_t_c])
 
-    def _get_reward_masac(self):
-        return self.unwrapped.cal_reward_value_masac()
+    def _get_reward_masac(self, t="combine"):
+        return self.unwrapped.cal_reward_value_masac(t)
 
     def _process_obs_masac(self, obs, obs_type):
         # 当前episode相机坐标系下机械臂工具的目标位姿

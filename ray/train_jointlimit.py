@@ -45,7 +45,7 @@ class MultiAgentReachEnv(MultiAgentEnv):
             action_dict["agent_2"],
         ])
         observation, reward, terminated, truncated, info = self.env_core.step(action)
-        pos_err_reward, rot_err_reward, pose_err_reward, action_penalty, vel_penalty = self.env_core._get_reward_masac()
+        pos_err_reward, rot_err_reward, pose_err_reward, action_penalty, vel_penalty = self.env_core._get_reward_masac(t="sparse")
 
         observations = {
             "agent_1": self.env_core._process_obs_masac(obs=observation, obs_type='pos'),
@@ -217,7 +217,7 @@ def _on_sample_end(env_runner, metrics_logger, samples, **kwargs):
                     np.array(agent_1_episode.observations[i][:3]), 
                     np.array(agent_1_episode.observations[i][-3:])
                 )
-                agent_1_episode.rewards[i-1] = ReachEnv.cal_pos_reward(error=err)
+                agent_1_episode.rewards[i-1] = ReachEnv.cal_pos_reward(error=err, t="sparse")
         # rot
                 agent_2_episode.observations[i][:3] = agent_2_episode.observations[index][-3:]
                 err["rot"] = calculate_rot_error(
@@ -225,7 +225,7 @@ def _on_sample_end(env_runner, metrics_logger, samples, **kwargs):
                     np.array(agent_2_episode.observations[i][-3:]),
                     angle_unit='radians'
                 )
-                agent_2_episode.rewards[i-1] = ReachEnv.cal_rot_reward(error=err)
+                agent_2_episode.rewards[i-1] = ReachEnv.cal_rot_reward(error=err, t="sparse")
     # for i in range(len(ep1.observations)):
     #     if ep1.observations[i][0] == 0 and  ep1.observations[i][1] == 0:
     #         print(_on_sample_end.count)
@@ -239,7 +239,7 @@ def _on_sample_end(env_runner, metrics_logger, samples, **kwargs):
     #     print(f"ep1 act:{ep1.actions[i]}")
 
     
-# config.callbacks(on_sample_end=_on_sample_end)
+config.callbacks(on_sample_end=_on_sample_end)
 
 tuner = tune.Tuner(
     trainable=config.algo_class,

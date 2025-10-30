@@ -474,10 +474,16 @@ class ReachEnv(ManipulationEnv):
         self.writer.add_scalar(str, y_value, self.steps_ctr)
 
     @staticmethod
-    def cal_pos_reward(error):
+    def cal_pos_reward(error, t="combine"):
         # pos_err_reward = 0.0
         pos_err = error["pos"]
-        return combined_reward(pos_err)
+        if t == "combine":
+            return combined_reward(pos_err)
+        else:
+            if pos_err < 0.01:
+                return 10.0
+            else:
+                return 0.0
         # if pos_err > error["pos_init"]:
         #     pos_err_reward -= 5.0
         # elif pos_err > FinalPosErrThreshold:
@@ -487,10 +493,16 @@ class ReachEnv(ManipulationEnv):
         # return pos_err_reward
 
     @staticmethod
-    def cal_rot_reward(error):
+    def cal_rot_reward(error, t="combine"):
         # rot_err_reward = 0.0
         rot_err = error["rot"]
-        return combined_reward(rot_err)
+        if t == "combine":
+            return combined_reward(rot_err)
+        else:
+            if rot_err < 0.03:
+                return 10.0
+            else:
+                return 0.0
         # if rot_err > error["rot_init"]:
         #     rot_err_reward -= 5.0
         # elif rot_err > FinalRotErrThreshold:
@@ -540,7 +552,7 @@ class ReachEnv(ManipulationEnv):
 
         return reward_value
 
-    def cal_reward_value_masac(self):
+    def cal_reward_value_masac(self, t="combine"):
         # 奖励和惩罚项
         pos_err_reward, rot_err_reward, pose_err_reward = 0.0, 0.0, 0.0
         action_penalty, vel_penalty = 0.0, 0.0
@@ -553,21 +565,33 @@ class ReachEnv(ManipulationEnv):
         # else:
         #     pos_err_reward += 10.0 * (1 - np.tanh(10.0 * self.pos_err))
         #     self.pos_episode_succ += 1
-        pos_err_reward = combined_reward(self.pos_err)
         if self.pos_err < self.pos_err_threshold:
             self.pos_episode_succ += 1
-            
-        # if self.rot_err > self.init_rot_err:
-        #     rot_err_reward -= 5.0
-        # elif self.rot_err > self.rot_err_threshold:
-        #     rot_err_reward -= 2.0 * self.rot_err
-        # else:
-        #     rot_err_reward += 10.0 * (1 - np.tanh(10.0 * self.rot_err))
-        #     self.rot_episode_succ += 1
-        rot_err_reward = combined_reward(self.rot_err)
         if self.rot_err < self.rot_err_threshold:
             self.rot_episode_succ += 1
-        
+
+        if t == "combine":
+            pos_err_reward = combined_reward(self.pos_err)
+            
+                
+            # if self.rot_err > self.init_rot_err:
+            #     rot_err_reward -= 5.0
+            # elif self.rot_err > self.rot_err_threshold:
+            #     rot_err_reward -= 2.0 * self.rot_err
+            # else:
+            #     rot_err_reward += 10.0 * (1 - np.tanh(10.0 * self.rot_err))
+            #     self.rot_episode_succ += 1
+            rot_err_reward = combined_reward(self.rot_err)
+            
+        elif t == "dense":
+            pos_err_reward = -self.pos_err
+            rot_err_reward = -self.rot_err
+        else:
+            if self.pos_err < self.pos_err_threshold:
+                pos_err_reward += 10.0
+            if self.rot_err < self.rot_err_threshold:
+                rot_err_reward += 10.0
+            
         # if (self.rot_err < self.rot_err_threshold and self.pos_err < self.pos_err_threshold):
         #     pose_err_reward = 20.0
 
@@ -653,7 +677,7 @@ class ReachEnv(ManipulationEnv):
                     self.exp_id = get_next_experiment_id(self.log_dir)
                     
                     self.trajectory = []
-                    if self.counter % 10 == 0:
+                    if self.counter % 30 == 0:
                         self.update_camera_pose()
                 else:
                     if self.episodes_ctr % 20 == 0:

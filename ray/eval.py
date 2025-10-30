@@ -169,7 +169,7 @@ def main():
         .framework("torch")
         .reporting(
             metrics_num_episodes_for_smoothing=5,
-            min_sample_timesteps_per_iteration=100_000,
+            min_sample_timesteps_per_iteration=12_000,
         )
         # .evaluation(
         #     evaluation_interval=1,
@@ -186,7 +186,7 @@ def main():
         #     # gym_env_vectorize_mode="ASYNC"
         # )
     )
-    checkpoint_dir = "/home/ey/rl/src/rlreach2/rlreach/ray/db/ray_results/MultiAgentReach_2025-10-18_14-59-19/multi_agent_reach/SAC_MultiReach-v0_f9829_00000_0_2025-10-18_14-59-22/checkpoint_000158"
+    checkpoint_dir = "/home/ey/rl/src/rlreach2/rlreach/ray/db/ray_results/nogdr/multi_agent_reach/SAC_MultiReach-v0_1b80c_00000_0_2025-10-23_21-49-34/checkpoint_000024"
     config.callbacks(
         on_algorithm_init=(
             lambda algorithm, _dir=checkpoint_dir, **kw: algorithm.restore_from_path(_dir)

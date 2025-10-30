@@ -62,10 +62,9 @@ class RealWorldUR5e(Node):
         self.target_pos = None
 
         self.freq = 60.0
-        beta = 0.01
-        min_cutoff = 1.0
-        d_cutoff = 1.0
-        self.filters = [OneEuroFilter(x0=0, t0=0, dx0=0, beta=beta, min_cutoff=min_cutoff, d_cutoff=d_cutoff) for _ in range(6)]
+        beta = 0.05
+        min_cutoff = 0.001
+        self.filters = [OneEuroFilter(x0=0, t0=0, dx0=0, beta=beta, min_cutoff=min_cutoff) for _ in range(6)]
         self.time = 0
         
         if self.verbose:
@@ -104,7 +103,7 @@ class RealWorldUR5e(Node):
             joint_name = msg.joint_names[i]
             joint_pos = msg.actual.positions[i]
             # filter
-            # joint_pos = self.filters[i](self.time, joint_pos)
+            joint_pos = self.filters[i](self.time, joint_pos)
             actual_pos[joint_name] = joint_pos
         self.current_pos = actual_pos
         # if self.verbose:
